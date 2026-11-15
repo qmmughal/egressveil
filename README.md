@@ -4,6 +4,8 @@
 
 [![CI](https://github.com/qmmughal/egressveil/actions/workflows/ci.yml/badge.svg)](https://github.com/qmmughal/egressveil/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/egressveil.svg)](https://pypi.org/project/egressveil/)
+[![Python versions](https://img.shields.io/pypi/pyversions/egressveil.svg)](https://pypi.org/project/egressveil/)
 
 EgressVeil is a local-first, open-source security gateway. It detects sensitive
 information in the API traffic that supported AI coding agents send to LLM
@@ -46,7 +48,9 @@ secret.
 - It cannot inspect traffic that an agent sends straight to a vendor backend
   that you can't redirect, which affects Cursor in particular (see
   [Integrations](#integration-compatibility)).
-- It does not inspect responses from the model (planned).
+- It does not change responses from the model. Optional response
+  inspection (`gateway.inspect_responses`) only records findings in the
+  audit log.
 - It is not a replacement for keeping secrets out of your repository.
 
 See [docs/threat-model.md](docs/threat-model.md) for the full scope.
