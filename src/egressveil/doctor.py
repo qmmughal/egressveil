@@ -166,8 +166,9 @@ def _self_test(cfg: EgressVeilConfig, running: bool) -> Check:
             decision = resp.headers.get("x-egressveil-decision")
             status = resp.status
     except urllib.error.HTTPError as exc:
-        decision = exc.headers.get("x-egressveil-decision")
-        status = exc.code
+        with exc:  # an HTTPError holds the open response; always close it
+            decision = exc.headers.get("x-egressveil-decision")
+            status = exc.code
     except OSError:
         return Check(Status.FAIL, "self-test", "could not reach the gateway")
     if status == 400 and decision == "block":
