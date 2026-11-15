@@ -328,7 +328,10 @@ def test_strict_mode_fails_closed(kwargs: dict[str, Any], reason: str) -> None:
         (b'{"messages": NaN}', "invalid_json"),
         (b'{"model": "a", "model": "b"}', "duplicate_key"),
         (b'{"a":' * 100 + b"1" + b"}" * 100, "nesting_too_deep"),
-        (b"[" * 5000 + b"]" * 5000, "nesting_too_deep"),
+        # Object root so the result is the same whether the platform's json
+        # decoder raises RecursionError (Windows) or parses it (Linux/macOS)
+        # and the walker's depth limit rejects it.
+        (b'{"a":' + b"[" * 5000 + b"]" * 5000 + b"}", "nesting_too_deep"),
     ],
 )
 def test_malformed_bodies_fail_closed(raw: bytes, reason: str) -> None:
