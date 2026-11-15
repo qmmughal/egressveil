@@ -1,7 +1,7 @@
 # Threat Model
 
-> Status: draft for Phase 0. This model will be revisited before each phase
-> ships.
+> Status: reviewed for Phase 1. Mitigations marked *(Phase 2)* are not
+> implemented yet. This model will be revisited before each phase ships.
 
 ## Assets
 
@@ -15,10 +15,13 @@
 
 ## In scope
 
-| Threat | Example | Planned mitigation |
+| Threat | Example | Mitigation |
 | --- | --- | --- |
-| **Accidental disclosure** to an LLM provider | The agent reads `.env` and includes it in context | Detection plus `BLOCK` / `REDACT` |
-| Disclosure through **tool results** | Output of `cat config.yml` is sent back as a tool result | Parsers inspect tool-result fields, not only user messages |
+| **Accidental disclosure** to an LLM provider | The agent reads `.env` and includes it in context | Secret and token detection plus `BLOCK` / `REDACT`. PII and hostnames *(Phase 2)* |
+| Disclosure through **tool results** | Output of `cat config.yml` is sent back as a tool result | The parser walks every string, including tool results and tool inputs |
+| **Parser differential** smuggling | A duplicate JSON key, where EgressVeil scans one value and the upstream reads the other | Duplicate keys, `NaN` and excessive nesting are rejected, and JSON escapes are decoded before scanning |
+| **DNS rebinding / browser CSRF** to the local gateway | A web page resolves its domain to `127.0.0.1` and posts to the gateway | Host-header allowlist, browser `Origin` requests rejected, JSON content type required |
+| **Truncated stream accepted as complete** | Upstream fails mid-response | The client connection is aborted, not ended cleanly |
 | **Misdirected upstream** | Config or environment points the agent at a look-alike host | Per-provider https host allowlist |
 | **Gateway exposure** on the LAN | The gateway listens on `0.0.0.0` and other hosts relay through it | Loopback-only default, with an explicit opt-in that warns |
 | **Secrets leaking through logs** | The audit log or an error message contains the matched value | Findings store offsets only, config rejects raw-value logging, and errors name locations, not values |

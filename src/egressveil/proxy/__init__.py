@@ -1,9 +1,10 @@
-"""Local HTTP gateway.
+"""Local HTTP gateway (aiohttp).
 
-Not implemented in Phase 0. The gateway will listen on loopback only by
-default, forward supported provider API calls to allowlisted upstreams, and
-enforce bounded request bodies and streaming buffers. See
-``docs/architecture.md``.
+See :mod:`egressveil.proxy.server` and ``docs/architecture.md``.
 """
 
 from __future__ import annotations
+
+from egressveil.proxy.server import HEALTH_PATH, GatewayComponents, build_components, create_app
+
+__all__ = ["HEALTH_PATH", "GatewayComponents", "build_components", "create_app"]

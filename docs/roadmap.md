@@ -3,7 +3,7 @@
 The phases are ordered by dependency. Each phase ships only when its tests,
 documentation and threat-model review are complete. There are no dates.
 
-## Phase 0: Foundation (current)
+## Phase 0: Foundation (done)
 
 - [x] `src/` package layout, Hatchling build, MIT license
 - [x] CLI: `version`, `config validate`, `doctor`
@@ -12,20 +12,32 @@ documentation and threat-model review are complete. There are no dates.
       macOS and Windows, plus dependency auditing
 - [x] Architecture, threat model, security design and integration docs
 
-## Phase 1: Claude Code gateway
+## Phase 1: Claude Code gateway (current)
 
-- [ ] `egressveil serve`: an async gateway on loopback with body and stream limits
-- [ ] An Anthropic Messages API parser covering system, messages, tool_use,
-      tool_result and streaming SSE passthrough
-- [ ] Secret and token detectors: provider key patterns, private keys, JWTs,
-      high-entropy strings in context, with fixtures and a false-positive
-      corpus
-- [ ] Policy engine with most-restrictive-wins evaluation
-- [ ] Redactor with stable per-request placeholders
-- [ ] JSONL audit log with keyed digests and restrictive file permissions
-- [ ] Strict-mode fail-closed paths, each covered by tests
-- [ ] Provider-shaped error responses for `BLOCK`
-- [ ] End-to-end tests against a local mock upstream (no real API calls in CI)
+- [x] `egressveil serve`: an async aiohttp gateway on loopback with body and
+      stream limits
+- [x] An Anthropic Messages API parser that walks every string field (system,
+      messages, tool_use, tool_result, tools, unknown fields), with streaming
+      SSE passthrough
+- [x] Secret and token detectors: vendor key patterns, private keys, URL
+      credentials, generic and `.env` assignments, JWTs, bearer and Basic auth
+      headers, with positive and false-positive test sets
+- [x] Policy engine with most-restrictive-wins evaluation
+- [x] Redactor with stable keyed placeholders (stable across requests, not
+      just within one, so prompt caching keeps working)
+- [x] JSONL audit log with keyed digests and restrictive file permissions
+- [x] Strict-mode fail-closed paths, each covered by tests
+- [x] Provider-shaped error responses for `BLOCK`
+- [x] End-to-end tests against a local mock upstream (no real API calls in CI)
+- [x] Host-header (DNS-rebinding) and browser-`Origin` protection
+- [x] `egressveil scan` for files and stdin
+- [x] Doctor detects a running gateway
+
+Known gaps carried forward:
+
+- [ ] Validate against a wider range of real Claude Code sessions and record
+      any endpoints that are blocked as `unsupported_route`
+- [ ] Optional support for an upstream HTTPS proxy, for corporate networks
 
 ## Phase 2: Aider and broader detection
 
@@ -33,7 +45,7 @@ documentation and threat-model review are complete. There are no dates.
 - [ ] PII detectors (email, phone, national ID formats) with locale awareness
 - [ ] Internal-hostname detector driven by `internal_domains`
 - [ ] `egressveil run -- <agent> [args]`: launches the agent with base URLs set
-- [ ] Doctor checks that the gateway is running and that routing works
+- [ ] Doctor verifies end to end that routing works
 
 ## Phase 3: More agents and operational maturity
 

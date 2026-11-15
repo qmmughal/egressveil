@@ -63,6 +63,7 @@ jobs:
           egressveil --help
           egressveil version
           egressveil config validate --config configs/egressveil.example.yaml
+          egressveil scan configs/egressveil.example.yaml README.md
           egressveil doctor
 
   build:

@@ -28,7 +28,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from egressveil.detectors import DETECTOR_CATEGORIES
+from egressveil.detectors import DETECTOR_CATEGORIES, IMPLEMENTED_CATEGORIES
 from egressveil.policy import GatewayMode, PolicyAction
 from egressveil.providers import KNOWN_PROVIDERS
 
@@ -110,6 +110,7 @@ class GatewayConfig:
     allow_non_loopback: bool = False
     max_request_body_bytes: int = 16 * MIB
     max_stream_buffer_bytes: int = 1 * MIB
+    allow_opaque_content: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +195,7 @@ class EgressVeilConfig:
             ("gateway.mode", g.mode.value),
             ("gateway.max_request_body_bytes", str(g.max_request_body_bytes)),
             ("gateway.max_stream_buffer_bytes", str(g.max_stream_buffer_bytes)),
+            ("gateway.allow_opaque_content", str(g.allow_opaque_content).lower()),
         ]
         for name, p in sorted(self.providers.items()):
             state = "enabled" if p.enabled else "disabled"
@@ -202,6 +204,8 @@ class EgressVeilConfig:
         rows.extend((f"policy.rule[{r.detector}]", r.action.value) for r in self.policy.rules)
         for name, d in sorted(self.detectors.items()):
             extra = f" ({len(d.internal_domains)} internal domains)" if d.internal_domains else ""
+            if name not in IMPLEMENTED_CATEGORIES:
+                extra += " [not implemented yet; no effect]"
             rows.append((f"detectors.{name}", ("enabled" if d.enabled else "disabled") + extra))
         rows.append(("audit.enabled", str(self.audit.enabled).lower()))
         rows.append(("telemetry.enabled", str(self.telemetry_enabled).lower()))
@@ -340,6 +344,7 @@ _GATEWAY_KEYS = frozenset(
         "allow_non_loopback",
         "max_request_body_bytes",
         "max_stream_buffer_bytes",
+        "allow_opaque_content",
     },
 )
 _PROVIDER_KEYS = frozenset({"enabled", "upstream_url", "allow_custom_upstream"})
@@ -384,6 +389,12 @@ def _parse_gateway(v: _Validator, raw: object) -> GatewayConfig:
             f"{path}.mode",
             "permissive mode forwards uninspectable requests instead of blocking them",
         )
+    allow_opaque = v.boolean(data, "allow_opaque_content", path, d.allow_opaque_content)
+    if allow_opaque:
+        v.warn(
+            f"{path}.allow_opaque_content",
+            "images and other binary content will be forwarded without inspection",
+        )
     return GatewayConfig(
         listen_host=host,
         listen_port=v.integer(data, "listen_port", path, d.listen_port, 1, 65535),
@@ -395,6 +406,7 @@ def _parse_gateway(v: _Validator, raw: object) -> GatewayConfig:
         max_stream_buffer_bytes=v.integer(
             data, "max_stream_buffer_bytes", path, d.max_stream_buffer_bytes, 1 * KIB, 64 * MIB
         ),
+        allow_opaque_content=allow_opaque,
     )
 
 

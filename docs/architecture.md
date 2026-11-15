@@ -1,8 +1,8 @@
 # Architecture
 
-> Status: Phase 0. Only configuration, the CLI and the doctor exist. This
-> document describes the target design for the components that later phases
-> will build.
+> Status: Phase 1. The gateway, the Anthropic parser, the secret and token
+> detectors, the policy engine, the redactor and the audit log are
+> implemented. PII and hostname detectors, and the OpenAI parser, are planned.
 
 ## Overview
 
@@ -34,57 +34,74 @@ URL.
 
 ## Package layout
 
-| Module | Responsibility | Phase |
-| --- | --- | --- |
-| `egressveil.cli` | Typer CLI: `version`, `config validate`, `doctor` (later `serve`, `run`) | 0 |
-| `egressveil.config` | Config discovery, strict schema validation, secure defaults | 0 |
-| `egressveil.policy` | `PolicyAction`, `GatewayMode`; rule evaluation later | 0 / 1 |
-| `egressveil.providers` | Provider registry and allowlists; request/response parsers later | 0 / 1 |
-| `egressveil.detectors` | `Detector` protocol and `Finding`; concrete detectors later | 0 / 1 |
-| `egressveil.proxy` | Async HTTP gateway, streaming, size limits | 1 |
-| `egressveil.redactor` | Placeholder substitution | 1 |
-| `egressveil.audit` | Append-only JSONL audit events | 1 |
+| Module | Responsibility |
+| --- | --- |
+| `egressveil.cli` | Typer CLI: `version`, `config validate`, `doctor`, `serve`, `scan` |
+| `egressveil.config` | Config discovery, strict schema validation, secure defaults |
+| `egressveil.proxy.server` | aiohttp gateway: host and origin checks, size limits, forwarding, streaming, audit |
+| `egressveil.inspection` | A pure, synchronous pipeline: route, parse, detect, decide, redact |
+| `egressveil.providers.anthropic` | Route classification, hardened JSON parsing, a walker over every string field |
+| `egressveil.detectors` | The `Detector` protocol, `Finding`, span merging, and the `patterns` secret and token rules |
+| `egressveil.policy.engine` | Maps each finding to an action. The most restrictive action wins |
+| `egressveil.redactor` | Keyed, stable placeholders |
+| `egressveil.audit` | Key management and the append-only JSONL audit log |
 
-## Request lifecycle (target)
+## Request lifecycle
 
-1. **Accept.** The gateway accepts a connection on the loopback listener and
-   reads the request body, up to `gateway.max_request_body_bytes`. A larger
-   body gets `413` and is not forwarded.
-2. **Route.** The request path and headers select a provider parser. If no
-   parser matches, the result depends on the mode: strict mode returns an
-   error, and permissive mode forwards the request with an audit event.
-3. **Parse.** The parser extracts every model-bound text field (system
-   prompt, message content, tool results, tool definitions) together with a
-   JSON path for each one. If the body fails to parse, the request is treated
-   as uninspectable (see step 2).
-4. **Detect.** Every enabled detector scans every extracted field and
-   produces `Finding`s. A `Finding` records offsets and a rule ID, never the
-   matched text.
-5. **Decide.** The policy engine maps each finding to an action. The most
-   restrictive action wins, in the order `BLOCK` > `REDACT` > `LOG_ONLY` >
-   `ALLOW`.
-6. **Transform.** The redactor rewrites the affected fields, and the parser
-   re-serializes the body.
-7. **Audit.** One audit event per request records the provider, decision,
-   counts per detector and rule, and keyed hashes for correlation.
-8. **Forward.** The request goes over HTTPS to the allowlisted upstream. The
-   agent's own `Authorization` / `x-api-key` header is passed through
-   unchanged and never logged.
-9. **Respond.** The response streams back to the agent. Streaming responses
-   pass through a bounded buffer of `gateway.max_stream_buffer_bytes`.
-   Response inspection is a later-phase feature.
+1. **Accept.** The loopback listener rejects a foreign `Host` (DNS
+   rebinding) or a browser `Origin`. The `/_egressveil/health` endpoint is
+   answered locally and never forwarded.
+2. **Bound.** A declared `Content-Length` above `max_request_body_bytes`
+   gets `413` before the body is read, and so does a chunked body that grows
+   past the limit while it is read.
+3. **Route.** `POST /v1/messages` and `/v1/messages/count_tokens` are
+   inspected. A bodyless `GET`/`HEAD` has only its URL inspected. Anything
+   else is unsupported.
+4. **Parse.** The body must be UTF-8 `application/json` and uncompressed.
+   Duplicate keys, `NaN` and nesting deeper than 64 levels are rejected. The
+   walker collects every string together with its JSON location. It marks
+   base64 images and documents as *opaque*, and strings inside `thinking`
+   blocks as *signed*.
+5. **Detect.** Every enabled, implemented detector scans every field, plus
+   the decoded query string. This runs in a worker thread so the event loop
+   keeps streaming other responses.
+6. **Decide.** The policy engine maps each finding to an action, and the
+   most restrictive action wins. A `REDACT` in a signed field or in the URL
+   escalates to `BLOCK`. In strict mode, an uninspectable request becomes
+   `BLOCK`. In permissive mode it is forwarded unchanged and flagged.
+7. **Transform.** For `REDACT`, the affected strings are rewritten in place
+   and the body is re-serialized as ASCII JSON. Otherwise the original bytes
+   are forwarded.
+8. **Forward.** The request goes to the allowlisted https upstream with
+   verified TLS. Hop-by-hop headers, `Host` and `Origin` are dropped. The
+   agent's `x-api-key` / `Authorization` header passes through untouched.
+   Redirects are not followed, and environment proxies are ignored.
+9. **Respond.** The response status and headers are relayed. The body is
+   streamed in chunks of at most `max_stream_buffer_bytes` and is not
+   decompressed. If the upstream fails mid-stream, the client connection is
+   aborted.
+10. **Audit.** One event per request records the outcome, the reason, and
+    for each finding the rule, location and keyed digest. No content is
+    recorded.
 
 ## Extension points
 
-- **Providers** implement a parser that extracts fields and re-serializes a
-  request. Adding a provider means adding a `ProviderSpec` and a parser.
+- **Providers** implement route classification and field extraction. The
+  next one is the OpenAI-compatible parser (Phase 2).
 - **Detectors** implement the `Detector` protocol (`category`, and
-  `scan(text) -> list[Finding]`).
+  `scan(text) -> list[Finding]`), and are registered in `build_detectors`
+  and `IMPLEMENTED_CATEGORIES`.
 - **Policies** are data (YAML), not code.
 
 ## Dependencies
 
-The runtime dependencies are kept small and well known: Typer for the CLI
-and PyYAML (always `safe_load`) for configuration. Phase 1 will add an async
-HTTP stack, chosen for streaming support and a good security track record.
-That choice will be documented here.
+The runtime dependencies are kept small and well known:
+
+- **Typer**: the CLI.
+- **PyYAML**: configuration, always loaded with `safe_load`.
+- **aiohttp**: the HTTP server and the streaming HTTP client, in one mature
+  package. It was chosen over the standard library's `http.server`, which
+  Python's own documentation says is not intended for production use, and
+  over a Starlette + Uvicorn + httpx stack, which would add three or more
+  dependencies for the same capability. `pip-audit` checks it in CI every
+  week.

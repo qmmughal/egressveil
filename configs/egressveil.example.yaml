@@ -11,8 +11,10 @@
 # using its own credentials; EgressVeil forwards the Authorization header
 # untouched. `config validate` rejects files that appear to contain secrets.
 #
-# NOTE: Phase 0 only validates this file. The gateway that enforces it is
-# under development - see docs/roadmap.md.
+# Run the gateway with:  egressveil serve --config path/to/egressveil.yaml
+#
+# NOTE: the pii and internal_hostnames detectors are accepted here but are not
+# implemented yet (Phase 2); enabling them currently has no effect.
 
 version: 1
 
@@ -27,6 +29,9 @@ gateway:
   allow_non_loopback: false
   max_request_body_bytes: 16777216   # 16 MiB
   max_stream_buffer_bytes: 1048576   # 1 MiB
+  # Images and PDFs (base64) cannot be inspected. In strict mode they are
+  # blocked unless this is true. Text in the same request is still inspected.
+  allow_opaque_content: false
 
 # Upstream endpoints. Hosts must be on the built-in provider allowlist
 # unless allow_custom_upstream is set for that provider. https:// only.

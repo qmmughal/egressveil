@@ -1,105 +1,177 @@
 # Security Design
 
 This document lists EgressVeil's security controls. For each one it says
-whether it is **enforced today** (Phase 0, in config validation) or
-**planned** (the runtime behavior in later phases).
+whether it is **implemented** (as of Phase 1) or **planned**.
 
 ## 1. Local-only listening by default
 
-- `gateway.listen_host` defaults to `127.0.0.1`.
-- **Enforced today:** a non-loopback address is a validation error unless
-  `gateway.allow_non_loopback: true` is also set, and even then validation
-  emits a warning.
-- **Planned:** the gateway refuses to start on an invalid configuration.
+- **Implemented:**
+  - `gateway.listen_host` defaults to `127.0.0.1`.
+  - A non-loopback address is a validation error unless
+    `gateway.allow_non_loopback: true` is also set, and even then validation
+    emits a warning.
+  - `egressveil serve` refuses to start on an invalid configuration.
+- **Implemented:** the **Host header** of every request must be one of the
+  gateway's own addresses (`127.0.0.1:<port>`, `localhost:<port>`,
+  `[::1]:<port>`). This defeats DNS-rebinding attacks, where a web page
+  resolves its own domain to `127.0.0.1` in order to reach local services.
+- **Implemented:** any request with an `Origin` header is rejected. Browsers
+  set that header and agent CLIs don't, so web pages can't use the gateway
+  through cross-site requests.
 
 ## 2. Provider endpoint allowlisting
 
 - Each known provider has a fixed set of official hosts (see
   `egressveil.providers.KNOWN_PROVIDERS`).
-- **Enforced today:** upstream URLs must be `https://`, must not embed
+- **Implemented:** upstream URLs must be `https://`, must not embed
   credentials, query strings or fragments, and must point to an allowlisted
   host. A custom host needs `allow_custom_upstream: true` for that provider
   and produces a warning.
-- **Planned:** the gateway connects only to the configured upstream and
-  verifies TLS certificates with the system trust store. There is no option
-  to disable verification.
+- **Implemented:** the gateway connects only to the configured upstream and
+  verifies TLS with the system trust store
+  (`ssl.create_default_context()`). There is no option to disable
+  verification.
+- **Implemented:** upstream redirects are **not followed**. They go back to
+  the agent as they are.
+- **Implemented:** environment proxies (`HTTPS_PROXY`) are not used
+  (`trust_env=False`), so traffic can't be sent somewhere unexpected without
+  you noticing.
 
-## 3. Detection
+## 3. What is inspected
 
-The planned detector categories are `secrets`, `tokens`, `pii` and
-`internal_hostnames`.
+- **Implemented:** the Anthropic parser walks **every string** in the JSON
+  body: system prompt, messages, tool definitions, `tool_use` inputs,
+  `tool_result` content, and fields it doesn't know about. A new API field
+  therefore can't carry text past the detectors. The only values it skips
+  are identifier-like control values (`model`, `type`, `role`, `id`,
+  `tool_use_id`, `media_type`) and provider-issued blobs (`signature`,
+  `redacted_thinking`).
+- **Implemented:** the query string is scanned. Because a URL can't be
+  rewritten safely, a finding there that would be redacted is blocked instead.
+- **Implemented:** JSON is decoded before scanning, so `\uXXXX` escapes
+  can't hide a value.
+- **Implemented:** hardening against parser differentials. Duplicate keys,
+  `NaN`/`Infinity`, non-object roots and nesting deeper than 64 levels make a
+  request uninspectable. This guarantees EgressVeil inspects the same
+  document the upstream parses.
+- **Not inspected:** headers. The agent's `x-api-key` / `Authorization`
+  header is forwarded untouched. Response bodies are also not inspected
+  (planned).
 
+## 4. Detection
+
+- **Implemented:** `secrets` and `tokens` (see
+  `egressveil/detectors/patterns.py`).
+  - **Vendor rules** match known key prefixes: Anthropic, OpenAI, AWS,
+    GitHub, GitLab, Slack, Stripe, Google, npm and Hugging Face. There are
+    also rules for PEM private keys and passwords embedded in URLs.
+  - **Generic rules** match `password = "..."`-style and `.env`-style
+    assignments. To keep false positives on ordinary code low, they fire
+    only on quoted or `.env` values with at least one digit and an entropy of
+    at least 3.0 bits per character, and they ignore placeholders.
+  - **Token rules** match JWTs, bearer tokens and Basic auth headers.
+  - Every quantifier is bounded, to avoid regex denial of service. A test
+    checks that a 1 MB input is scanned in well under the limit.
 - Detectors return `Finding(detector, rule_id, start, end, confidence)`. A
-  finding holds **no matched text**, so findings are always safe to log or
-  display.
-- Secret detection combines provider-specific patterns with entropy checks
-  and context keywords.
-- The internal-hostname detector matches the configured
-  `internal_domains` suffixes.
+  finding holds **no matched text**.
+- **Planned (Phase 2):** `pii` and `internal_hostnames`. Configuration
+  accepts them today, but they have no effect. `serve`, `doctor` and
+  `config validate` all say so.
 
-## 4. Policy actions
+## 5. Policy actions
 
 | Action | Behavior |
 | --- | --- |
 | `ALLOW` | Forward unchanged, record nothing |
-| `REDACT` | Replace each span with a placeholder such as `[EGRESSVEIL:secrets:3f9a]`, then forward |
-| `BLOCK` | Send nothing upstream, and return a provider-shaped error to the agent |
+| `REDACT` | Replace each span with `[EGRESSVEIL:<rule_id>:<8 hex>]`, then forward |
+| `BLOCK` | Send nothing upstream. Return HTTP 400 with an Anthropic-shaped `invalid_request_error` that names the rule IDs and JSON locations, never the values |
 | `LOG_ONLY` | Forward unchanged and write an audit event |
 
-When findings conflict, the most restrictive action wins. By default,
-secrets and tokens are blocked and PII and hostnames are redacted.
-Configuring `ALLOW` or `LOG_ONLY` for secrets or tokens produces a warning.
+The most restrictive action wins (`BLOCK` > `REDACT` > `LOG_ONLY` >
+`ALLOW`). Overlapping matches are merged before redaction. By default,
+secrets and tokens are blocked. Configuring `ALLOW` or `LOG_ONLY` for them
+produces a warning.
 
-## 5. Fail-closed behavior (strict mode)
+**Signed content.** `thinking` blocks carry a provider signature, so
+modifying them would invalidate the request. A finding in one that would be
+redacted is blocked instead.
 
-`gateway.mode: strict` is the default. In strict mode the gateway returns an
-error instead of forwarding when any of these is true:
+**Placeholders.** The 8-hex suffix is an HMAC-SHA256 of the value under the
+local key, so the same value always gets the same placeholder. That keeps the
+conversation consistent for the model across turns and keeps provider prompt
+caching effective. The placeholder reveals nothing about the value without the
+key. Redacted bodies are re-serialized deterministically as ASCII JSON.
+Requests with nothing to redact are forwarded byte-for-byte.
 
-- no provider parser matches the request,
-- the body can't be parsed, or uses an unsupported encoding or compression,
-- the body exceeds the size limit,
-- a detector raises an error.
+## 6. Fail-closed behavior (strict mode)
 
-`permissive` mode forwards these requests with an audit event and is meant
-only for evaluation. Validation warns when it is enabled.
+`gateway.mode: strict` is the default. **Implemented:** in strict mode the
+gateway returns an error instead of forwarding when any of these is true:
 
-## 6. Safe audit logging
+| Condition | Reason code |
+| --- | --- |
+| Endpoint other than `POST /v1/messages[/count_tokens]` or a bodyless `GET`/`HEAD` | `unsupported_route` |
+| Content type is not `application/json` | `unsupported_content_type` |
+| Body is compressed (`Content-Encoding` other than identity) | `unsupported_content_encoding` |
+| Invalid UTF-8 or JSON, a non-object root, or `NaN` | `invalid_json` |
+| Duplicate JSON key | `duplicate_key` |
+| Nesting deeper than 64 levels | `nesting_too_deep` |
+| Base64 image or document (unless `gateway.allow_opaque_content: true`) | `opaque_content` |
+| A detector raised an exception | `detector_error` |
+| Body larger than `max_request_body_bytes`, declared or streamed (HTTP 413) | `body_too_large` |
 
-- **Enforced today:** `audit.include_raw_values: true` is rejected.
-- **Planned:** events are JSONL with timestamp, provider, decision, counts per
-  detector and rule, and HMAC-SHA256 digests of matched values under a local
-  random key. Digests let you correlate repeat occurrences without
-  storing the value. Request bodies, headers and credentials are never logged.
-- The audit file is created with user-only permissions where the OS supports
-  that.
+`permissive` mode forwards uninspectable requests unchanged and writes an
+audit event with `"inspected": false`. It still enforces policy on everything
+it can inspect. Validation warns when it is enabled.
 
-## 7. No telemetry
+## 7. Safe audit logging
 
-EgressVeil contains no telemetry, analytics or update pings. **Enforced
-today:** `telemetry.enabled: true` is rejected. The only key exists to make
-that explicit.
+- **Implemented:**
+  - Events are JSONL: timestamp, request ID, method, path (without the query
+    string), outcome, reason, route, byte count, upstream status, duration,
+    and for each finding the detector, rule ID, JSON location, action and a
+    16-hex HMAC-SHA256 digest of the value.
+  - Request bodies, headers, query strings and raw values are never written.
+    Tests check this against real request flows.
+  - `audit.include_raw_values: true` is rejected.
+  - The digest key is 32 random bytes in `egressveil.key`, next to the audit
+    log. It is created atomically with mode `0600` inside a `0700`
+    directory. Windows has no POSIX modes, so there the files inherit the
+    ACL of your profile directory.
+  - The gateway opens the audit log at startup and refuses to start if it
+    can't. If a write fails at runtime, it reports that on stderr and keeps
+    serving.
+  - Access logging is disabled, because access logs would record query
+    strings.
 
-## 8. No automatic restoration into tool calls
+## 8. No telemetry
 
-Some redaction proxies "un-redact" model responses so the user sees original
-values. EgressVeil does **not** automatically restore a secret into model
-output that the agent may execute, such as a tool-use block or a shell
-command. A model, or a prompt injection, could otherwise trick the gateway
-into putting a real credential into a command that sends it somewhere. Any
-future restoration feature will be opt-in, limited to display-only text, and
-documented separately.
+EgressVeil contains no telemetry, analytics or update pings.
+`telemetry.enabled: true` is rejected.
 
-## 9. Bounded bodies and streaming buffers
+## 9. No automatic restoration into tool calls
+
+**Implemented by design:** there is no un-redaction code path. A model, or a
+prompt injection, therefore can't trick the gateway into putting a real
+credential into a tool call or shell command. Any future restoration feature
+will be opt-in, limited to display-only text, and documented separately.
+
+## 10. Bounded bodies and streaming buffers
 
 - `gateway.max_request_body_bytes`: default 16 MiB, allowed range 1 KiB to 256 MiB.
+  **Implemented:** the server checks the declared `Content-Length` before
+  reading and also enforces the limit while reading chunked bodies. Either
+  way it returns `413 request_too_large`.
 - `gateway.max_stream_buffer_bytes`: default 1 MiB, allowed range 1 KiB to 64 MiB.
-- **Enforced today:** values outside these ranges are rejected.
-- **Planned:** an oversized request gets `413`, and a stream that exceeds its
-  buffer is terminated.
+  **Implemented:** responses are relayed in chunks of at most this size.
+  The whole response is never held in memory.
+- Upstream timeouts are 30 s to connect and 600 s of read inactivity. If the
+  upstream fails mid-stream, the client connection is aborted rather than
+  ended cleanly, so a truncated response is never mistaken for a complete one.
 
-## 10. Configuration hygiene
+## 11. Configuration hygiene
 
-- **Enforced today:**
+- **Implemented:**
   - `yaml.safe_load` only, so YAML tags cannot construct objects
   - the config file is capped at 1 MiB
   - the schema rejects unknown keys
@@ -107,7 +179,7 @@ documented separately.
   - validation messages name the key path and the expected type, never the value
   - YAML syntax errors report only the line and column
 
-## 11. Proxy bypass limitations
+## 12. Proxy bypass limitations
 
 EgressVeil can protect only what passes through it. The
 [threat model](threat-model.md) and [integrations](integrations.md) documents

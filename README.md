@@ -9,11 +9,12 @@ EgressVeil is a local-first, open-source security gateway. It detects sensitive
 information in the API traffic that supported AI coding agents send to LLM
 providers, and redacts or blocks it before it leaves your machine.
 
-> **Project status: pre-alpha (Phase 0).** This release has the project
-> foundation: configuration schema and validation, the CLI, and an
-> environment doctor. **The gateway does not intercept, redact or block any
-> traffic yet.** Do not rely on EgressVeil for data protection until a release
-> says that it does.
+> **Project status: pre-alpha (Phase 1).** EgressVeil now runs as a local
+> gateway for the **Anthropic Messages API**, the API Claude Code uses. It
+> detects **secrets and tokens** and blocks or redacts them according to your
+> policy. PII and internal-hostname detection, and support for other agents,
+> are not implemented yet. Detection is heuristic. Treat EgressVeil as one
+> layer of defense, not a guarantee.
 
 ---
 
@@ -38,37 +39,79 @@ secret.
 - It cannot inspect traffic that an agent sends straight to a vendor backend
   that you can't redirect, which affects Cursor in particular (see
   [Integrations](#integration-compatibility)).
+- It does not inspect responses from the model (planned).
 - It is not a replacement for keeping secrets out of your repository.
 
 See [docs/threat-model.md](docs/threat-model.md) for the full scope.
 
+## Quick start with Claude Code
+
+```bash
+egressveil serve
+```
+
+In another terminal, point Claude Code at the gateway and start it as usual:
+
+```bash
+# Linux/macOS
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8787
+claude
+```
+
+```powershell
+# Windows PowerShell
+$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:8787"
+claude
+```
+
+Claude Code keeps its own credentials. EgressVeil passes the auth header to
+`api.anthropic.com` unchanged and never logs it.
+
+If a request contains something your policy blocks, the request never leaves
+your machine, and Claude Code shows an error like this:
+
+```text
+API Error: 400 EgressVeil: request blocked before leaving this machine:
+sensitive data detected: secrets/aws_access_key_id at messages[4].content[0].content[0].text.
+Remove the value from the conversation (for example start a new session)
+or adjust the EgressVeil policy. (request ev_3c1f0a9e2b7d4c11)
+```
+
+> **Note on `BLOCK`:** Claude Code resends the whole conversation on every
+> turn. Once a blocked value is in the conversation, every later request is
+> blocked too, until you start a new session (for example with `/clear`). If
+> you prefer to keep working, set the `secrets` and `tokens` rules to
+> `REDACT`. The model then sees a placeholder such as
+> `[EGRESSVEIL:aws_access_key_id:5b2e91c0]` instead of the value.
+
 ## Features
 
-### Implemented (Phase 0)
+### Implemented
 
 | Feature | Notes |
 | --- | --- |
-| `egressveil` CLI | `version`, `config validate`, `doctor` |
-| Strict YAML configuration schema | Rejects unknown keys and wrong types, and validates numeric bounds |
-| Secret-safe validation output | Messages name the location of a problem, never the value. Files that contain credential-shaped strings are rejected |
-| Secure-by-default settings enforced at validation | Loopback-only listener, https-only allowlisted upstreams, strict (fail-closed) mode, no raw-value audit logging, no telemetry |
-| Environment doctor | Checks Python, config, the listen port, the audit location, proxy and base-URL environment variables (values hidden), and agent CLIs on `PATH` |
-| Cross-platform | Windows, Linux, macOS. No shell dependency |
+| `egressveil serve` | A local gateway for the Anthropic Messages API (`/v1/messages`, `/v1/messages/count_tokens`), with streaming (SSE) passthrough |
+| Secret detectors | Anthropic, OpenAI, AWS, GitHub, GitLab, Slack, Stripe, Google, npm and Hugging Face keys; private keys; credentials in URLs; generic `password = "..."` and `.env` assignments |
+| Token detectors | JWTs, bearer tokens and Basic auth headers |
+| Policy engine | `ALLOW` / `REDACT` / `BLOCK` / `LOG_ONLY` for each detector. The most restrictive action wins |
+| Redaction | Placeholders keyed by an HMAC of the value, so the same value always gets the same placeholder. That keeps conversations consistent and prompt caching effective. Redacted values are never restored |
+| Fail-closed strict mode | Blocks unsupported endpoints, non-JSON or compressed bodies, malformed or duplicate-key JSON, too-deep nesting, uninspectable images and PDFs, and requests where a detector fails |
+| Audit log | JSONL with request metadata, rule IDs, JSON locations and keyed digests. Never bodies, headers, query strings or raw values |
+| Local hardening | Loopback-only listener. Host-header check against DNS rebinding. Browser `Origin` requests rejected. Upstreams are https-only and allowlisted, TLS is verified, and redirects are not followed |
+| `egressveil scan` | Run the detectors and policy over files or stdin. Prints locations and rule IDs, never values |
+| `egressveil doctor` | Checks Python, config, the listen port and whether the gateway is running, the audit location, the base-URL environment variables, and the active detectors |
+| `egressveil config validate` | A strict schema with secure defaults. Output never contains values |
 
 ### Planned
 
 | Feature | Phase |
 | --- | --- |
-| Local HTTP gateway for the Anthropic Messages API, with streaming | 1 |
-| Secret and token detectors (pattern plus entropy, with low false positives) | 1 |
-| Policy engine (`ALLOW` / `REDACT` / `BLOCK` / `LOG_ONLY`) | 1 |
-| Redaction with stable placeholders | 1 |
-| JSONL audit log with keyed hashes and no raw values | 1 |
 | OpenAI-compatible API parser (for Aider) | 2 |
 | PII and internal-hostname detectors | 2 |
 | `egressveil run -- <agent>` launcher that sets base URLs | 2 |
 | OpenClaw integration | 3 |
 | Cursor: documented, experimental support where technically possible | 3 |
+| Response-side inspection | 3 |
 
 The details are in [docs/roadmap.md](docs/roadmap.md).
 
@@ -76,42 +119,27 @@ The details are in [docs/roadmap.md](docs/roadmap.md).
 
 ```mermaid
 flowchart TD
-    A[AI coding agent<br/>Claude Code / Aider] -->|"HTTP on 127.0.0.1<br/>(base URL override)"| G
+    A[AI coding agent<br/>Claude Code] -->|"HTTP on 127.0.0.1<br/>ANTHROPIC_BASE_URL"| G
 
     subgraph G[EgressVeil local gateway]
         direction TB
-        P[Provider parser] --> D[Sensitive-data detectors]
+        H[Host / Origin / size checks] --> P[Anthropic parser<br/>every string field]
+        P --> D[Secret & token detectors]
         D --> E[Policy engine]
-        E -->|REDACT| R[Redaction engine]
-        E -->|BLOCK| X[Local error response]
+        E -->|REDACT| R[Redactor]
+        E -->|BLOCK or uninspectable| X[Local 400 error]
         E -.-> L[(Audit log<br/>no raw values)]
-        R -.-> L
     end
 
-    R -->|HTTPS to allowlisted host| U[Supported LLM API]
+    R -->|verified TLS, allowlisted host| U[api.anthropic.com]
     E -->|ALLOW / LOG_ONLY| U
+    U -->|streamed response| A
 
     T[Other agent traffic:<br/>shell, web fetch, MCP, git] -. "NOT inspected" .-> I((Internet))
 ```
 
-Built-in controls (the design is in [docs/security-design.md](docs/security-design.md)):
-
-- **Local-only listening** by default. Binding to a non-loopback address needs
-  an explicit opt-in.
-- **Provider endpoint allowlisting**. Upstreams must be `https://` hosts on a
-  per-provider allowlist.
-- **Detection** of secrets, tokens, PII and internal hostnames *(planned)*.
-- **Policy actions**: `ALLOW`, `REDACT`, `BLOCK`, `LOG_ONLY`.
-- **Fail closed** in strict mode. Requests that EgressVeil can't parse or
-  inspect are blocked *(planned; strict mode is the validated default)*.
-- **Safe audit logging**. Raw values are never written, and config that asks
-  for them is rejected.
-- **No telemetry**. None exists, and `telemetry.enabled: true` is rejected.
-- **No automatic restoration** of redacted secrets into model output that
-  becomes an executable tool call.
-- **Bounded memory**. Request bodies and streaming buffers have configurable
-  hard limits.
-- **Documented bypass limitations**. See [docs/integrations.md](docs/integrations.md).
+Each control, and whether it is implemented, is described in
+[docs/security-design.md](docs/security-design.md).
 
 ## Installation
 
@@ -132,44 +160,43 @@ For development, install with `".[dev]"` instead (see [CONTRIBUTING.md](CONTRIBU
 ## Usage
 
 ```console
-$ egressveil --help
-$ egressveil version
-egressveil 0.1.0.dev0
+$ egressveil serve
+EgressVeil 0.2.0.dev0 gateway
+  listening   http://127.0.0.1:8787
+  upstream    https://api.anthropic.com
+  mode        strict
+  audit log   /home/you/.egressveil/audit.jsonl
+  note: not implemented yet, no effect: internal_hostnames, pii
+
+Point Claude Code at the gateway:
+  export ANTHROPIC_BASE_URL=http://127.0.0.1:8787
+
+Press Ctrl+C to stop.
 ```
 
-Validate a configuration file. The output never includes values that could
-be secret:
+Scan files before you share them with an agent:
 
 ```console
-$ egressveil config validate --config configs/egressveil.example.yaml
-Config source: configs/egressveil.example.yaml (--config)
-Configuration is valid (0 warning(s)).
-Effective settings:
-  gateway.listen                       127.0.0.1:8787
-  gateway.mode                         strict
-  ...
+$ egressveil scan .env deploy/notes.md
+.env:3:16: BLOCK    secrets/env_file_assignment
+deploy/notes.md:12:9: BLOCK    secrets/aws_access_key_id
+2 finding(s).
 ```
 
-An insecure setting is rejected with its location:
+The exit status is 0 when nothing is found, 1 when there are findings, and
+2 when a file can't be read.
 
-```console
-$ egressveil config validate -c bad.yaml
-Config source: bad.yaml (--config)
-  error: gateway.listen_host: must be a loopback address (127.0.0.1, ::1 or localhost); set gateway.allow_non_loopback: true to override
-Configuration is INVALID (1 error(s)).
+Validate configuration, or check your environment:
+
+```bash
+egressveil config validate --config configs/egressveil.example.yaml
+egressveil doctor
 ```
 
-Check your environment:
+Each audit event is one JSON line:
 
-```console
-$ egressveil doctor
-egressveil 0.1.0.dev0 doctor
-  [OK  ] python       3.12.2 (CPython)
-  [OK  ] config       built-in defaults: valid
-  [OK  ] listen port  127.0.0.1:8787 is available
-  [INFO] claude code  'claude' found on PATH; ANTHROPIC_BASE_URL not set
-  ...
-0 failure(s), 0 warning(s).
+```json
+{"ts":"2026-11-16T09:12:03.512+00:00","request_id":"ev_3c1f0a9e2b7d4c11","provider":"anthropic","method":"POST","path":"/v1/messages","outcome":"block","reason":"policy","route":"json_inspect","inspected":true,"bytes_in":48211,"findings":[{"detector":"secrets","rule_id":"aws_access_key_id","location":"messages[4].content[0].content[0].text","action":"BLOCK","digest":"9f2c4be01a7d33e8"}]}
 ```
 
 Configuration is discovered in this order: `--config PATH`, then
@@ -183,23 +210,26 @@ All options are documented in
 
 | Agent | Status | Routing mechanism | Coverage |
 | --- | --- | --- | --- |
-| **Claude Code** | Initial priority, Phase 1 | `ANTHROPIC_BASE_URL` pointing to the local gateway | Anthropic API calls only. Not tool, shell, web or MCP traffic |
-| **Aider** | Initial priority, Phase 2 | Provider base-URL settings (for example `--openai-api-base`, `ANTHROPIC_BASE_URL`) | LLM API calls only |
+| **Claude Code** | **Available (pre-alpha)** | `ANTHROPIC_BASE_URL=http://127.0.0.1:8787` | Anthropic Messages API calls only. Not tool, shell, web or MCP traffic |
+| **Aider** | Partial: Anthropic models only | `ANTHROPIC_BASE_URL`. OpenAI-compatible models need Phase 2 | LLM API calls only |
 | **OpenClaw** | Future | To be determined | Not supported yet |
 | **Cursor** | Limited and experimental | Most model traffic goes through Cursor's own backend | Expected to be partial at best. See the docs |
 
-Nothing in this table works yet. The Status column is the target phase for
-each integration. Routing details and their limitations are in
-[docs/integrations.md](docs/integrations.md).
+Routing details and their limitations are in [docs/integrations.md](docs/integrations.md).
 
 ## Security limitations
 
-- **Phase 0 does not protect any traffic.**
 - Coverage is limited to API calls that a supported agent sends to the
   gateway. An agent, plugin or tool that ignores the base-URL setting, or that
   makes its own network calls, bypasses EgressVeil.
-- Detection is heuristic. Both false negatives and false positives will
-  happen. Treat EgressVeil as defense in depth, not a guarantee.
+- Detection is heuristic. Encoded, split or novel secrets can get through,
+  and false positives happen. PII and internal hostnames are **not** detected
+  yet.
+- Images and PDFs cannot be inspected. Strict mode blocks them unless you
+  set `gateway.allow_opaque_content: true`.
+- Model responses are not inspected.
+- The gateway connects directly to the upstream and does not use
+  `HTTPS_PROXY`.
 - EgressVeil does not perform TLS interception and does not install a root CA.
 - A local process running as your user can reconfigure or bypass EgressVeil.
   It does not defend against malware on your machine.
@@ -210,10 +240,10 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 | Phase | Focus |
 | --- | --- |
-| **0, current** | Repository, packaging, CI, config schema, CLI, doctor, threat model |
-| 1 | Anthropic gateway for Claude Code: streaming proxy, secret and token detectors, policy, redaction, audit |
+| 0, done | Repository, packaging, CI, config schema, CLI, doctor, threat model |
+| **1, current** | Anthropic gateway for Claude Code: streaming proxy, secret and token detectors, policy, redaction, audit, `scan` |
 | 2 | OpenAI-compatible parser for Aider, PII and hostname detectors, agent launcher |
-| 3 | OpenClaw, experimental Cursor support, policy packs |
+| 3 | OpenClaw, experimental Cursor support, policy packs, response inspection |
 
 See [docs/roadmap.md](docs/roadmap.md).
 
