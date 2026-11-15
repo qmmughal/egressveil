@@ -14,10 +14,13 @@ sensitive values.
 | `egressveil version` | Prints the version | 0 |
 | `egressveil config validate` | Validates configuration and prints the effective settings | 0 valid · 1 invalid |
 | `egressveil doctor` | Checks the environment, the gateway, a canary self-test and integrations | 0 no failures · 1 at least one failure |
-| `egressveil serve` | Runs the gateway in the foreground until Ctrl+C | 0 stopped · 1 invalid config, or can't start or listen |
+| `egressveil serve [--log-file PATH]` | Runs the gateway in the foreground until Ctrl+C. `--log-file` appends output to a file instead of the console | 0 stopped · 1 invalid config, or can't start or listen |
 | `egressveil run [--start/--no-start] -- <agent> [args...]` | Runs an agent through the gateway, starting the gateway if needed (unless `--no-start`) | the agent's own exit code · 1 invalid config · 2 launcher error, such as the agent not being found or the gateway not running with `--no-start` |
 | `egressveil scan <paths...>` | Scans files, or stdin with `-`, using the configured detectors and policy. Prints `path:line:col: ACTION category/rule  digest=...` | 0 nothing found · 1 findings · 2 a file couldn't be read |
 | `egressveil setup <agent>` | Prints setup steps for `claude-code`, `aider`, `openclaw` or `cursor` | 0 · 2 unknown agent |
+| `egressveil service install [--dry-run]` | Starts the gateway now and at every login, for the current user without admin rights: Windows Task Scheduler, macOS launchd or Linux systemd `--user`. `--dry-run` shows what it would write and run | 0 running · 1 failed |
+| `egressveil service uninstall [--dry-run]` | Stops the background gateway and removes it from login | 0 · 1 failed |
+| `egressveil service status` | Shows whether the service is installed and the gateway is answering | 0 both · 1 otherwise |
 
 ## `egressveil run` environment
 

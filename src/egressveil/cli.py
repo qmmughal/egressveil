@@ -25,6 +25,11 @@ app = typer.Typer(
 )
 config_app = typer.Typer(help="Inspect and validate configuration.", no_args_is_help=True)
 app.add_typer(config_app, name="config")
+service_app = typer.Typer(
+    help="Run the gateway in the background at login (per user, no admin rights).",
+    no_args_is_help=True,
+)
+app.add_typer(service_app, name="service")
 
 ConfigOption = Annotated[
     Path | None,
@@ -120,11 +125,22 @@ def _routing_instructions(cfg: EgressVeilConfig) -> list[str]:
 
 
 @app.command()
-def serve(config: ConfigOption = None) -> None:
+def serve(
+    config: ConfigOption = None,
+    log_file: Annotated[
+        Path | None,
+        typer.Option("--log-file", help="Append output to this file instead of the console."),
+    ] = None,
+) -> None:
     """Run the local gateway (Anthropic API at /, OpenAI-compatible API at /openai)."""
     from aiohttp import web
 
     from egressveil.proxy import build_components, create_app
+
+    if log_file is not None:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        stream = log_file.open("a", encoding="utf-8", buffering=1)
+        sys.stdout = sys.stderr = stream
 
     result = _load_or_exit(config)
     cfg = result.config
@@ -194,6 +210,119 @@ def run(
         typer.echo(f"egressveil: {exc}", err=True)
         raise typer.Exit(code=2) from None
     raise typer.Exit(code=code)
+
+
+# --------------------------------------------------------------------------- service
+
+
+def _service_context(config: Path | None) -> tuple[EgressVeilConfig, Path | None, Path]:
+    result = _load_or_exit(config)
+    cfg = result.config
+    assert cfg is not None  # noqa: S101
+    source = config or result.source.path
+    state = cfg.audit.resolved_path.parent if cfg.audit.enabled else Path.home() / ".egressveil"
+    return cfg, (source.resolve() if source else None), state
+
+
+def _run_plan(plan: object, dry_run: bool) -> None:
+    import subprocess
+
+    from egressveil.service import ServicePlan
+
+    assert isinstance(plan, ServicePlan)  # noqa: S101
+    for path, content in plan.files.items():
+        if dry_run:
+            typer.echo(
+                f"would write {path}:\n" + "\n".join("    " + ln for ln in content.splitlines())
+            )
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-16" if path.suffix == ".xml" else "utf-8")
+            typer.echo(f"wrote {path}")
+    for index, cmd in enumerate(plan.commands):
+        if dry_run:
+            typer.echo("would run: " + " ".join(cmd))
+            continue
+        done = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
+        if done.returncode != 0 and index not in plan.allow_failure:
+            typer.echo(
+                f"egressveil: command failed: {' '.join(cmd)}\n{done.stderr.strip()}", err=True
+            )
+            raise typer.Exit(code=1)
+    for path in plan.remove:
+        if dry_run:
+            typer.echo(f"would remove {path}")
+        elif path.exists():
+            path.unlink()
+            typer.echo(f"removed {path}")
+
+
+DryRunOption = Annotated[
+    bool, typer.Option("--dry-run", help="Show what would be written and run, change nothing.")
+]
+
+
+@service_app.command("install")
+def service_install(config: ConfigOption = None, dry_run: DryRunOption = False) -> None:
+    """Start the gateway now and at every login."""
+    import time
+
+    from egressveil.doctor import gateway_health
+    from egressveil.service import current_platform, install_plan
+
+    cfg, source, state = _service_context(config)
+    plan = install_plan(
+        current_platform(),
+        python=Path(sys.executable),
+        config=source,
+        log_file=state / "gateway.log",
+        home=Path.home(),
+    )
+    _run_plan(plan, dry_run)
+    if dry_run:
+        return
+    for _ in range(40):
+        if gateway_health(cfg) is not None:
+            typer.echo(f"EgressVeil is running at {gateway_base_url(cfg)} and will start at login.")
+            return
+        time.sleep(0.5)
+    typer.echo(
+        "Installed, but the gateway did not answer yet; check 'egressveil service status' "
+        f"and {state / 'gateway.log'}.",
+        err=True,
+    )
+    raise typer.Exit(code=1)
+
+
+@service_app.command("uninstall")
+def service_uninstall(config: ConfigOption = None, dry_run: DryRunOption = False) -> None:
+    """Stop the background gateway and remove it from login."""
+    from egressveil.service import current_platform, uninstall_plan
+
+    _, _, state = _service_context(config)
+    _run_plan(uninstall_plan(current_platform(), home=Path.home(), state_dir=state), dry_run)
+
+
+@service_app.command("status")
+def service_status(config: ConfigOption = None) -> None:
+    """Show whether the background service is installed and the gateway is answering."""
+    import subprocess
+
+    from egressveil.doctor import gateway_health
+    from egressveil.service import current_platform, status_command
+
+    cfg, _, _ = _service_context(config)
+    cmd = status_command(current_platform())
+    try:
+        done = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
+        installed = done.returncode == 0
+    except OSError:
+        installed = False
+    running = gateway_health(cfg) is not None
+    typer.echo(f"service installed: {'yes' if installed else 'no'}")
+    typer.echo(f"gateway answering: {'yes' if running else 'no'} ({gateway_base_url(cfg)})")
+    if not (installed and running):
+        raise typer.Exit(code=1)
 
 
 # --------------------------------------------------------------------------- scan

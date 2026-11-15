@@ -6,6 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![PyPI](https://img.shields.io/pypi/v/egressveil.svg)](https://pypi.org/project/egressveil/)
 [![Python versions](https://img.shields.io/pypi/pyversions/egressveil.svg)](https://pypi.org/project/egressveil/)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/qmmughal/egressveil/badge)](https://scorecard.dev/viewer/?uri=github.com/qmmughal/egressveil)
 
 EgressVeil is a local-first, open-source security gateway. It detects sensitive
 information in the API traffic that supported AI coding agents send to LLM
@@ -66,7 +67,8 @@ egressveil run -- aider           # Aider (Anthropic or OpenAI models)
 
 `egressveil run` starts the gateway if it isn't already running, points the
 agent's `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` at it, and stops the
-gateway again when the agent exits. If you prefer to run the gateway
+gateway again when the agent exits. To keep the gateway running in the
+background at every login instead, use `egressveil service install`. If you prefer to run the gateway
 yourself, start it with `egressveil serve` and set the variables in another
 terminal:
 
@@ -206,7 +208,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
 
 ```console
 $ egressveil serve
-EgressVeil 0.7.0 gateway
+EgressVeil 0.8.0 gateway
   listening   http://127.0.0.1:8787
   anthropic   /        -> https://api.anthropic.com
   openai      /openai  -> https://api.openai.com

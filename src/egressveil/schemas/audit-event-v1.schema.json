@@ -17,7 +17,7 @@
     "outcome": { "enum": ["forward", "redact", "block", "error"] },
     "reason": {
       "type": "string",
-      "description": "Machine code: policy, unsupported_route, unsupported_content_type, unsupported_content_encoding, invalid_json, duplicate_key, nesting_too_deep, opaque_content, opaque_content_forwarded, detector_error, body_too_large, bad_host, browser_origin, provider_disabled, upstream_timeout, upstream_unreachable."
+      "description": "Machine code: policy, unsupported_route, unsupported_content_type, unsupported_content_encoding, invalid_json, duplicate_key, nesting_too_deep, opaque_content, opaque_content_forwarded, detector_error, body_too_large, bad_host, browser_origin, provider_disabled, ambiguous_path, upstream_timeout, upstream_unreachable."
     },
     "route": { "enum": ["json_inspect", "bodyless", "unsupported"] },
     "inspected": { "type": "boolean" },

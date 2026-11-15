@@ -101,13 +101,16 @@ assumed.
 - [x] Performance and soak numbers (`docs/performance.md`), plus a soak test
       in CI. Scanning got about 5x faster
 
-### 0.8: Hardening
+### 0.8: Hardening (done)
 
-- [ ] CodeQL and OpenSSF Scorecard in CI, and an SBOM with every release
-- [ ] HTTP edge-case tests: request smuggling, malformed chunked bodies,
-      oversized headers
-- [ ] Optional background service: Windows Task Scheduler, macOS launchd,
-      Linux systemd `--user`
+- [x] CodeQL and OpenSSF Scorecard in CI, and a signed CycloneDX SBOM with
+      every release
+- [x] HTTP edge-case tests: request smuggling, malformed chunked bodies,
+      oversized headers, pipelining and absolute-form targets. They found and
+      fixed a mismatch between the inspected and forwarded path
+- [x] Optional background service (`egressveil service`): Windows Task
+      Scheduler, macOS launchd, Linux systemd `--user`. A real
+      install/uninstall runs in CI on Windows and Linux
 
 ### 1.0.0-rc: Live validation
 

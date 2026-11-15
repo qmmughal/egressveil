@@ -33,6 +33,19 @@ whether it is **implemented** (as of Phase 1) or **planned**.
   verification.
 - **Implemented:** upstream redirects are **not followed**. They go back to
   the agent as they are.
+- **Implemented (0.8):** the upstream URL is built from the same normalised
+  path that was inspected, never from the raw request target. A request is
+  refused (`ambiguous_path`) if any of these is true:
+  - its encoded path doesn't decode to the inspected route,
+  - it contains percent-encoded `/`, `.` or `\`,
+  - the final URL's scheme, host or port would differ from the configured
+    upstream.
+
+  An absolute-form target such as `POST http://other.host/v1/messages` can
+  therefore never change what is forwarded or where. Raw-socket tests cover
+  this, along with request smuggling (`Content-Length` plus
+  `Transfer-Encoding`), conflicting lengths, malformed chunked bodies,
+  oversized headers and pipelining.
 - **Implemented:** environment proxies (`HTTPS_PROXY`) are **not** used by
   default (`trust_env=False`), so traffic can't be sent somewhere unexpected
   without you noticing. For corporate networks, set
@@ -244,3 +257,13 @@ list what bypasses it. Do not present EgressVeil as complete egress control.
 - Responses are **never modified**. Rewriting a stream mid-flight could
   corrupt tool calls, and there is deliberately no un-redaction path (see
   section 9).
+
+## 14. Supply chain
+
+- Every release is built by GitHub Actions from a tag, with signed build
+  provenance for the sdist, the wheel and a CycloneDX SBOM. It is published
+  to PyPI through Trusted Publishing, after a maintainer approves it.
+- CodeQL (`security-extended` queries), the OpenSSF Scorecard, `pip-audit`
+  and Ruff's security rules run in CI. Third-party actions are pinned to
+  commit SHAs, and every workflow runs with least privilege.
+
