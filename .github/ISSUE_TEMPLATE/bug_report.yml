@@ -1,0 +1,42 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not report security vulnerabilities here.** See SECURITY.md.
+        **Never paste real secrets, tokens, or API keys.** `egressveil config validate`
+        and `egressveil doctor` output is designed to be safe to share.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Include the command you ran and what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: Output of `egressveil doctor` and of the failing command.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: EgressVeil version
+      placeholder: output of `egressveil version`
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [Windows, macOS, Linux, Other]
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: AI coding agent (if relevant)
+      options: [Not applicable, Claude Code, Aider, OpenClaw, Cursor, Other]

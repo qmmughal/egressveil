@@ -1,0 +1,76 @@
+# EgressVeil example configuration.
+#
+# Copy to ./egressveil.yaml or to your user config directory and adjust:
+#   Windows: %APPDATA%\egressveil\egressveil.yaml
+#   macOS:   ~/Library/Application Support/egressveil/egressveil.yaml
+#   Linux:   ${XDG_CONFIG_HOME:-~/.config}/egressveil/egressveil.yaml
+#
+# Validate with:  egressveil config validate --config path/to/egressveil.yaml
+#
+# NEVER put API keys or other credentials in this file. Your agent keeps
+# using its own credentials; EgressVeil forwards the Authorization header
+# untouched. `config validate` rejects files that appear to contain secrets.
+#
+# NOTE: Phase 0 only validates this file. The gateway that enforces it is
+# under development - see docs/roadmap.md.
+
+version: 1
+
+gateway:
+  # Loopback only by default. Non-loopback addresses are rejected unless
+  # allow_non_loopback is explicitly set to true.
+  listen_host: 127.0.0.1
+  listen_port: 8787
+  # strict: block requests EgressVeil cannot parse or inspect (fail closed).
+  # permissive: forward them with an audit event (evaluation only).
+  mode: strict
+  allow_non_loopback: false
+  max_request_body_bytes: 16777216   # 16 MiB
+  max_stream_buffer_bytes: 1048576   # 1 MiB
+
+# Upstream endpoints. Hosts must be on the built-in provider allowlist
+# unless allow_custom_upstream is set for that provider. https:// only.
+providers:
+  anthropic:
+    enabled: true
+    upstream_url: https://api.anthropic.com
+  openai:
+    enabled: false
+    upstream_url: https://api.openai.com
+
+policy:
+  # Applied to findings from detectors with no explicit rule.
+  # One of: ALLOW, REDACT, BLOCK, LOG_ONLY
+  default_action: REDACT
+  rules:
+    - detector: secrets
+      action: BLOCK
+    - detector: tokens
+      action: BLOCK
+    - detector: pii
+      action: REDACT
+    - detector: internal_hostnames
+      action: REDACT
+
+detectors:
+  secrets:
+    enabled: true
+  tokens:
+    enabled: true
+  pii:
+    enabled: true
+  internal_hostnames:
+    enabled: true
+    internal_domains:
+      - corp.example.com
+      - internal.example
+
+audit:
+  enabled: true
+  path: ~/.egressveil/audit.jsonl
+  # Raw sensitive values are never logged. Setting this to true is rejected.
+  include_raw_values: false
+
+telemetry:
+  # EgressVeil has no telemetry. This key exists only to make that explicit.
+  enabled: false
