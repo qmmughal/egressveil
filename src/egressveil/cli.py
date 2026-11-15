@@ -217,14 +217,22 @@ def scan(
 
     Exit status: 0 = nothing found, 1 = findings, 2 = a file could not be read.
     """
-    from egressveil.audit import AuditLogger
+    from egressveil.audit import KEY_FILENAME, AuditLogger, load_or_create_key
     from egressveil.inspection import Inspector
-    from egressveil.policy import PolicyAction
     from egressveil.redactor import Redactor
 
     cfg = _load_or_exit(config).config
     assert cfg is not None  # noqa: S101
-    key = secrets.token_bytes(32)
+    # Use the gateway's digest key so digests match the audit log and can be
+    # copied into policy.allow; fall back to a throwaway key.
+    try:
+        key = (
+            load_or_create_key(cfg.audit.resolved_path.parent / KEY_FILENAME)
+            if cfg.audit.enabled
+            else secrets.token_bytes(32)
+        )
+    except (OSError, ValueError):
+        key = secrets.token_bytes(32)
     inspector = Inspector.from_config(cfg, redactor=Redactor(key), audit=AuditLogger(None, key))
     limit = cfg.gateway.max_request_body_bytes
     total = 0
@@ -245,19 +253,97 @@ def scan(
             unreadable += 1
             continue
         text = data.decode("utf-8", errors="replace")
-        findings = sorted(inspector.scan_text(text), key=lambda f: (f.start, f.rule_id))
-        for f in findings:
-            action = inspector.action_for(f)
-            if action is PolicyAction.ALLOW:
-                continue
+        findings = sorted(inspector.evaluate_text(text), key=lambda t: (t[0].start, t[0].rule_id))
+        for f, action, digest in findings:
             line, col = _line_col(text, f.start)
-            typer.echo(f"{name}:{line}:{col}: {action.value:<8} {f.detector}/{f.rule_id}")
+            typer.echo(
+                f"{name}:{line}:{col}: {action.value:<8} {f.detector}/{f.rule_id}  digest={digest}"
+            )
             total += 1
     typer.echo(f"{total} finding(s).")
     if unreadable:
         raise typer.Exit(code=2)
     if total:
         raise typer.Exit(code=1)
+
+
+# --------------------------------------------------------------------------- setup
+
+_AGENTS = ("claude-code", "aider", "openclaw", "cursor")
+
+
+@app.command()
+def setup(
+    agent: Annotated[str, typer.Argument(help=f"One of: {', '.join(_AGENTS)}.")],
+    config: ConfigOption = None,
+) -> None:
+    """Show how to route a specific agent through EgressVeil."""
+    from egressveil.doctor import openclaw_config_path
+
+    cfg = _load_or_exit(config).config
+    assert cfg is not None  # noqa: S101
+    agent = agent.lower()
+    base = gateway_base_url(cfg)
+    openai_on = cfg.providers["openai"].enabled
+    if agent == "claude-code":
+        lines = [
+            "Claude Code reads ANTHROPIC_BASE_URL.",
+            "",
+            "  egressveil run -- claude",
+            "",
+            "or start 'egressveil serve' and set:",
+            *_routing_instructions(cfg),
+        ]
+    elif agent == "aider":
+        lines = [
+            "Aider (LiteLLM) reads ANTHROPIC_BASE_URL and OPENAI_API_BASE.",
+            "",
+            "  egressveil run -- aider --model anthropic/<model>",
+        ]
+        if openai_on:
+            lines.append("  egressveil run -- aider --model openai/<model>")
+        else:
+            lines += ["", "For OpenAI models, first set providers.openai.enabled: true."]
+    elif agent == "openclaw":
+        lines = [
+            f"Merge this into {openclaw_config_path()} (JSON5), then restart the OpenClaw gateway",
+            "(openclaw gateway restart). Keep your existing apiKey settings.",
+            "",
+            "{",
+            "  models: {",
+            "    providers: {",
+            "      // Built-in Anthropic provider, routed through EgressVeil",
+            f'      anthropic: {{ baseUrl: "{base}" }},',
+        ]
+        if openai_on:
+            lines += [
+                "      // OpenAI-compatible provider, routed through EgressVeil",
+                "      // (add your usual apiKey and models list)",
+                f'      "egressveil-openai": {{ baseUrl: "{base}{OPENAI_MOUNT_PATH}",'
+                ' api: "openai-completions" },',
+            ]
+        lines += [
+            "    },",
+            "  },",
+            "}",
+            "",
+            "Then check with: egressveil doctor   (looks for the gateway URL in the file)",
+        ]
+    elif agent == "cursor":
+        lines = [
+            "Cursor is NOT supported, and EgressVeil cannot protect it.",
+            "",
+            "Cursor sends model requests from Cursor's own servers, including when you use",
+            "'Override OpenAI Base URL', so a gateway on 127.0.0.1 is unreachable for it.",
+            "Exposing EgressVeil to the internet to work around this would defeat its purpose,",
+            "and the prompt would still pass through Cursor's backend. See docs/integrations.md.",
+        ]
+    else:
+        typer.echo(
+            f"egressveil: unknown agent {agent!r}; choose one of: {', '.join(_AGENTS)}", err=True
+        )
+        raise typer.Exit(code=2)
+    typer.echo("\n".join(lines))
 
 
 def main() -> None:

@@ -55,15 +55,33 @@ Known gaps carried forward:
 - [x] Verified with real clients: Aider 0.86.2 and the OpenAI and Anthropic
       Python SDKs, against the live APIs
 
-## Phase 3: More agents and operational maturity
+## Phase 3: More agents and operational maturity (done, v0.4.0)
 
-- [ ] OpenClaw integration (research first)
-- [ ] Experimental Cursor support where technically possible, with its
-      coverage documented
-- [ ] Shareable policy packs and per-project overrides
-- [ ] Optional response-side inspection
+- [x] OpenClaw integration: researched, with `egressveil setup openclaw`
+      and a doctor check. Not yet verified end to end with a running
+      OpenClaw
+- [x] Cursor assessed: not technically possible, because model requests
+      come from Cursor's servers. Documented, and reported by `setup` and
+      `doctor`
+- [x] Shareable policy packs (`balanced`, `redact`, `strict`, `audit`),
+      `extends`, and per-project overrides (`extends: user`)
+- [x] Allowlists by keyed digest, pattern or rule
+- [x] Optional response-side inspection, audit-only, with streaming deltas
+      reassembled
+- [x] Live validation with Claude Code 2.1.325 (routes used, block
+      message, redact pack)
 - [x] Signed GitHub releases with build provenance (v0.2.0)
 - [x] PyPI release via Trusted Publishing (`pip install egressveil`, v0.2.0)
+
+## Future ideas
+
+These are not scheduled. Contributions are welcome.
+
+- A live Claude Code session with a real key, covering the tool-result path
+- An end-to-end report on OpenClaw from a running installation
+- More national ID formats for the `pii` detector
+- Optional redaction of streamed responses (currently audit-only)
+- Packaged policy packs that are shared and versioned like dependencies
 
 ## Non-goals
 

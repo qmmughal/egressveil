@@ -45,11 +45,20 @@ claude
   `secrets` and `tokens` (see the README).
 - **Not inspected:** the commands that Claude Code tools run, web fetches,
   MCP server traffic, and any non-API connections.
-- **Verification so far:** the gateway is tested end to end against a mock
-  upstream that covers streaming, errors, redirects and compression. It has
-  also been smoke-tested against the live `api.anthropic.com` endpoint (TLS,
-  forwarding and the error passthrough). It has **not yet** been validated
-  across many Claude Code versions and workflows.
+- **Verified with Claude Code 2.1.325** (`egressveil run -- claude -p ...`
+  against the live API, with a dummy key):
+  - The only routes it used were `HEAD /api/hello` (a connectivity check,
+    forwarded) and `POST /v1/messages`. Strict mode doesn't break Claude
+    Code.
+  - Clean prompts were forwarded, and Anthropic's real authentication error
+    came back.
+  - A prompt containing a token was blocked locally, and Claude Code showed
+    EgressVeil's message as is.
+  - With the `redact` pack, the token, an email address and an internal
+    hostname all reached Anthropic only as placeholders.
+- **Not yet verified live:** the tool-result path, for example the agent
+  reading `.env` itself, needs a real API key, because the model has to
+  answer before a tool runs. It is covered by the end-to-end tests.
 - **Doctor:** `egressveil doctor` reports whether the gateway is running,
   whether `claude` is on `PATH`, and whether `ANTHROPIC_BASE_URL` points at
   the gateway. It never prints the variable's value.
@@ -79,26 +88,57 @@ egressveil run -- aider --model openai/gpt-5      # needs providers.openai.enabl
 - **Not inspected:** Aider's git operations, `/web` scraping, shell
   commands, and other providers that aren't routed through the gateway.
 
-## OpenClaw (future, Phase 3)
+## OpenClaw (available, configuration documented)
 
-Not supported yet. The routing mechanism will be documented once the
-integration has been researched and tested.
+[OpenClaw](https://docs.openclaw.ai/concepts/model-providers/custom-providers)
+reads its model providers from `models.providers` in `~/.openclaw/openclaw.json`
+(JSON5). The base URL of a built-in provider such as `anthropic` can be
+overridden, and custom OpenAI-compatible providers take a `baseUrl` that
+includes `/v1`. OpenClaw trusts the exact configured loopback origin, so no
+`allowPrivateNetwork` setting is needed.
 
-## Cursor (limited and experimental)
+`egressveil setup openclaw` prints the snippet for your configuration:
 
-Cursor is expected to be the most limited integration:
+```json5
+{
+  models: {
+    providers: {
+      anthropic: { baseUrl: "http://127.0.0.1:8787" },
+      // only when providers.openai.enabled: true in EgressVeil
+      "egressveil-openai": { baseUrl: "http://127.0.0.1:8787/openai/v1", api: "openai-completions" },
+    },
+  },
+}
+```
 
-- In typical configurations Cursor's model requests go through Cursor's own
-  backend, not directly from your machine to the model provider. A local
-  base-URL gateway therefore can't see most of this traffic.
-- Some custom-API-key or base-URL options may route specific requests
-  differently, but those requests may still go through vendor infrastructure.
-  Coverage is expected to be partial.
-- EgressVeil will **not** use TLS interception to work around this.
+- Keep your existing `apiKey` settings, then restart the OpenClaw gateway.
+- `egressveil doctor` checks whether `openclaw.json` contains a provider
+  `baseUrl` pointing at the gateway. It never prints the file.
+- **Not covered:** OpenClaw's own tools (browsing, shell, messaging
+  channels) and any provider whose `baseUrl` doesn't point at EgressVeil.
+- **Verification status:** the configuration follows OpenClaw's
+  documentation. It has **not** yet been verified end to end with a running
+  OpenClaw installation. Reports are welcome.
 
-Any Cursor support will be labeled experimental and will document exactly
-which request types are covered. Treat Cursor as **not protected** unless a
-release says otherwise.
+## Cursor (not supported)
+
+The Phase 3 assessment concluded that Cursor **cannot** be protected by a
+local gateway:
+
+- Cursor builds prompts and sends model requests from **Cursor's own
+  servers**, including when you set "Override OpenAI Base URL". Those
+  servers can't reach `127.0.0.1`. That's why guides for custom endpoints in
+  Cursor ask for a publicly reachable HTTPS URL
+  ([Cursor forum](https://forum.cursor.com/t/problem-reaching-openai-error-on-a-local-model-with-overriden-base-url/3975),
+  [LiteLLM's Cursor guide](https://docs.litellm.ai/docs/tutorials/cursor_integration)).
+- Exposing EgressVeil to the internet through a tunnel would contradict its
+  loopback-only design. It also wouldn't help: by the time a request
+  reached the gateway, your code would already have passed through Cursor's
+  backend.
+- EgressVeil will not use TLS interception to work around this.
+
+`egressveil setup cursor` and `egressveil doctor` both say so plainly. Treat
+Cursor as **not protected** by EgressVeil.
 
 ## Verifying routing
 

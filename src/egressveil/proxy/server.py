@@ -27,11 +27,12 @@ from yarl import URL
 
 from egressveil import __version__
 from egressveil.audit import KEY_FILENAME, AuditLogger, load_or_create_key
-from egressveil.config import EgressVeilConfig, ProviderConfig
+from egressveil.config import EgressVeilConfig, ProviderConfig, config_fingerprint
 from egressveil.inspection import Inspector, Outcome, Verdict
 from egressveil.providers import adapter_for_path
 from egressveil.providers.base import ProviderAdapter
 from egressveil.redactor import Redactor
+from egressveil.responses import ResponseScanner
 
 __all__ = ["HEALTH_PATH", "GatewayComponents", "build_components", "create_app"]
 
@@ -115,6 +116,8 @@ class _Gateway:
             gw.upstream_proxy if gw.upstream_proxy not in {"none", "env"} else None
         )
         self.trust_env = gw.upstream_proxy == "env"
+        self.inspect_responses = gw.inspect_responses
+        self.fingerprint = config_fingerprint(components.config)
         self.session: aiohttp.ClientSession | None = None
 
     async def start(self, _app: web.Application) -> None:
@@ -202,6 +205,8 @@ class _Gateway:
                         "version": __version__,
                         "mode": self.c.config.gateway.mode.value,
                         "providers": sorted(self.upstreams),
+                        "config": self.fingerprint,
+                        "inspect_responses": self.inspect_responses,
                     },
                     headers={REQUEST_ID_HEADER: rid},
                 )
@@ -301,6 +306,10 @@ class _Gateway:
         assert self.session is not None  # noqa: S101 - set in on_startup
         name = adapter.name
         headers = [(k, v) for k, v in request.headers.items() if k.lower() not in _DROP_REQUEST]
+        if self.inspect_responses:
+            # Uncompressed responses can be inspected without decoding on the side.
+            headers = [(k, v) for k, v in headers if k.lower() != "accept-encoding"]
+            headers.append(("Accept-Encoding", "identity"))
         try:
             upstream = await self.session.request(
                 request.method,
@@ -345,9 +354,19 @@ class _Gateway:
             response.headers[REQUEST_ID_HEADER] = rid
             response.headers[DECISION_HEADER] = decision
             await response.prepare(request)
+            scanner: ResponseScanner | None = None
+            if self.inspect_responses:
+                encoding = upstream.headers.get("Content-Encoding", "identity").lower()
+                candidate = ResponseScanner(
+                    self.c.inspector, upstream.headers.get("Content-Type"), self.max_body
+                )
+                if encoding == "identity" and candidate.active:
+                    scanner = candidate
             complete = False
             try:
                 async for chunk in upstream.content.iter_chunked(self.chunk):
+                    if scanner is not None:
+                        scanner.feed(chunk)
                     await response.write(chunk)
                 await response.write_eof()
                 complete = True
@@ -358,6 +377,12 @@ class _Gateway:
                     request.transport.close()
             except ConnectionResetError:
                 pass  # client went away
+            if scanner is not None:
+                audit_fields["response_findings"] = scanner.finish()
+                if scanner.truncated:
+                    audit_fields["response_inspection"] = "truncated"
+            elif self.inspect_responses:
+                audit_fields["response_inspection"] = "skipped"
             self._audit(
                 rid,
                 request,

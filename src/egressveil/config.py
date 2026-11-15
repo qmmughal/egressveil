@@ -15,6 +15,7 @@ Design rules for this module:
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import os
 import re
@@ -47,6 +48,7 @@ __all__ = [
     "PolicyRule",
     "ProviderConfig",
     "ValidationIssue",
+    "config_fingerprint",
     "discover_config",
     "load_config",
     "parse_config",
@@ -112,6 +114,8 @@ class GatewayConfig:
     max_stream_buffer_bytes: int = 1 * MIB
     allow_opaque_content: bool = False
     upstream_proxy: str = "none"
+    inspect_responses: bool = False
+    """Scan model responses and record findings in the audit log (never modified)."""
     """``none``, ``env`` or an ``http(s)://host:port`` proxy URL (no credentials)."""
 
 
@@ -136,14 +140,58 @@ class PolicyRule:
 
 
 @dataclass(frozen=True, slots=True)
+class AllowEntry:
+    """Suppresses matching findings. Exactly one of digest / pattern / rule is set.
+
+    * ``digest``: the 16-hex keyed digest from the audit log or ``egressveil
+      scan`` output, so a known false positive can be allowed without ever
+      writing the value into a config file.
+    * ``pattern``: a regular expression searched in the matched value (for
+      non-secret data such as your own company's email domain).
+    * ``rule``: a rule ID (e.g. ``phone_nanp``) to switch off entirely.
+
+    ``detectors`` optionally limits the entry to some detector categories.
+    """
+
+    kind: str
+    value: str
+    detectors: frozenset[str] = frozenset()
+    regex: re.Pattern[str] | None = None
+
+    def matches(self, detector: str, rule_id: str, value: str, digest: str) -> bool:
+        if self.detectors and detector not in self.detectors:
+            return False
+        if self.kind == "digest":
+            return digest == self.value
+        if self.kind == "rule":
+            return rule_id == self.value
+        return self.regex is not None and self.regex.search(value) is not None
+
+
+A = PolicyAction
+POLICY_PACKS: Final[dict[str, tuple[PolicyAction, dict[str, PolicyAction]]]] = {
+    # name: (default_action, per-detector actions)
+    "balanced": (A.REDACT, {"secrets": A.BLOCK, "tokens": A.BLOCK, "pii": A.REDACT,
+                            "internal_hostnames": A.REDACT}),
+    "strict": (A.BLOCK, {"secrets": A.BLOCK, "tokens": A.BLOCK, "pii": A.BLOCK,
+                         "internal_hostnames": A.BLOCK}),
+    "redact": (A.REDACT, {"secrets": A.REDACT, "tokens": A.REDACT, "pii": A.REDACT,
+                          "internal_hostnames": A.REDACT}),
+    "audit": (A.LOG_ONLY, {"secrets": A.LOG_ONLY, "tokens": A.LOG_ONLY, "pii": A.LOG_ONLY,
+                           "internal_hostnames": A.LOG_ONLY}),
+}  # fmt: skip
+
+
+def _pack_rules(pack: str) -> tuple[PolicyRule, ...]:
+    return tuple(PolicyRule(d, a) for d, a in POLICY_PACKS[pack][1].items())
+
+
+@dataclass(frozen=True, slots=True)
 class PolicyConfig:
     default_action: PolicyAction = PolicyAction.REDACT
-    rules: tuple[PolicyRule, ...] = (
-        PolicyRule("secrets", PolicyAction.BLOCK),
-        PolicyRule("tokens", PolicyAction.BLOCK),
-        PolicyRule("pii", PolicyAction.REDACT),
-        PolicyRule("internal_hostnames", PolicyAction.REDACT),
-    )
+    rules: tuple[PolicyRule, ...] = _pack_rules("balanced")
+    pack: str = "balanced"
+    allow: tuple[AllowEntry, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,11 +249,15 @@ class EgressVeilConfig:
             ("gateway.max_stream_buffer_bytes", str(g.max_stream_buffer_bytes)),
             ("gateway.allow_opaque_content", str(g.allow_opaque_content).lower()),
             ("gateway.upstream_proxy", urlsplit(g.upstream_proxy).hostname or g.upstream_proxy),
+            ("gateway.inspect_responses", str(g.inspect_responses).lower()),
         ]
         for name, p in sorted(self.providers.items()):
             state = "enabled" if p.enabled else "disabled"
             rows.append((f"providers.{name}", f"{state} -> {p.upstream_origin}"))
+        rows.append(("policy.pack", self.policy.pack))
         rows.append(("policy.default_action", self.policy.default_action.value))
+        if self.policy.allow:
+            rows.append(("policy.allow", f"{len(self.policy.allow)} entries"))
         rows.extend((f"policy.rule[{r.detector}]", r.action.value) for r in self.policy.rules)
         for name, d in sorted(self.detectors.items()):
             extra = f" ({len(d.internal_domains)} internal domains)" if d.internal_domains else ""
@@ -339,7 +391,7 @@ class _Validator:
 
 
 _ROOT_KEYS = frozenset(
-    {"version", "gateway", "providers", "policy", "detectors", "audit", "telemetry"},
+    {"version", "extends", "gateway", "providers", "policy", "detectors", "audit", "telemetry"},
 )
 _GATEWAY_KEYS = frozenset(
     {
@@ -351,10 +403,12 @@ _GATEWAY_KEYS = frozenset(
         "max_stream_buffer_bytes",
         "allow_opaque_content",
         "upstream_proxy",
+        "inspect_responses",
     },
 )
 _PROVIDER_KEYS = frozenset({"enabled", "upstream_url", "allow_custom_upstream"})
-_POLICY_KEYS = frozenset({"default_action", "rules"})
+_POLICY_KEYS = frozenset({"pack", "default_action", "rules", "allow"})
+_ALLOW_KEYS = frozenset({"digest", "pattern", "rule", "detectors", "comment"})
 _RULE_KEYS = frozenset({"detector", "action"})
 _HOSTNAME_ONLY_KEYS = frozenset({"include_common_internal_suffixes", "include_private_ips"})
 _DETECTOR_KEYS = frozenset({"enabled", "internal_domains"}) | _HOSTNAME_ONLY_KEYS
@@ -415,6 +469,7 @@ def _parse_gateway(v: _Validator, raw: object) -> GatewayConfig:
         ),
         allow_opaque_content=allow_opaque,
         upstream_proxy=_parse_upstream_proxy(v, data, path),
+        inspect_responses=v.boolean(data, "inspect_responses", path, d.inspect_responses),
     )
 
 
@@ -493,15 +548,24 @@ def _parse_providers(v: _Validator, raw: object) -> dict[str, ProviderConfig]:
 def _parse_policy(v: _Validator, raw: object) -> PolicyConfig:
     path = "policy"
     data = v.mapping(raw, path, _POLICY_KEYS)
-    d = PolicyConfig()
-    default_action = v.enum(data, "default_action", path, d.default_action)
-    if "rules" not in data:
-        return PolicyConfig(default_action=default_action, rules=d.rules)
-    raw_rules = data["rules"]
+    pack = "balanced"
+    if "pack" in data:
+        value = data["pack"]
+        if isinstance(value, str) and value.strip().lower() in POLICY_PACKS:
+            pack = value.strip().lower()
+        else:
+            v.error(f"{path}.pack", f"must be one of: {', '.join(POLICY_PACKS)}")
+    pack_default, pack_actions = POLICY_PACKS[pack]
+    if pack == "audit":
+        v.warn(f"{path}.pack", "audit pack only logs findings; nothing is blocked or redacted")
+    default_action = v.enum(data, "default_action", path, pack_default)
+
+    # Explicit rules override the pack per detector (they do not replace it).
+    actions: dict[str, PolicyAction] = dict(pack_actions)
+    raw_rules = data.get("rules", [])
     if not isinstance(raw_rules, list):
         v.error(f"{path}.rules", f"expected a list, got {_type_name(raw_rules)}")
-        return PolicyConfig(default_action=default_action, rules=d.rules)
-    rules: list[PolicyRule] = []
+        raw_rules = []
     seen: set[str] = set()
     for i, rraw in enumerate(raw_rules):
         rpath = f"{path}.rules[{i}]"
@@ -520,14 +584,81 @@ def _parse_policy(v: _Validator, raw: object) -> PolicyConfig:
             v.error(f"{rpath}.detector", f"duplicate rule for detector {detector!r}")
             continue
         seen.add(detector)
-        action = v.enum(rdata, "action", rpath, PolicyAction.BLOCK)
-        if detector in {"secrets", "tokens"} and action in {
-            PolicyAction.ALLOW,
-            PolicyAction.LOG_ONLY,
-        }:
-            v.warn(f"{rpath}.action", f"{action.value} lets {detector} reach the upstream API")
-        rules.append(PolicyRule(detector, action))
-    return PolicyConfig(default_action=default_action, rules=tuple(rules))
+        actions[detector] = v.enum(rdata, "action", rpath, PolicyAction.BLOCK)
+    if pack != "audit":
+        for detector in ("secrets", "tokens"):
+            if actions.get(detector) in {PolicyAction.ALLOW, PolicyAction.LOG_ONLY}:
+                v.warn(
+                    f"{path}.rules",
+                    f"{actions[detector].value} lets {detector} reach the upstream API",
+                )
+    rules = tuple(PolicyRule(d, a) for d, a in actions.items())
+    return PolicyConfig(
+        default_action=default_action,
+        rules=rules,
+        pack=pack,
+        allow=_parse_allow(v, data.get("allow"), f"{path}.allow"),
+    )
+
+
+_DIGEST = re.compile(r"^[0-9a-f]{16}$")
+
+
+def _parse_allow(v: _Validator, raw: object, path: str) -> tuple[AllowEntry, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        v.error(path, f"expected a list, got {_type_name(raw)}")
+        return ()
+    from egressveil.detectors import known_rule_ids
+
+    rule_ids = known_rule_ids()
+    entries: list[AllowEntry] = []
+    for i, item in enumerate(raw):
+        ipath = f"{path}[{i}]"
+        data = v.mapping(item, ipath, _ALLOW_KEYS)
+        kinds = [k for k in ("digest", "pattern", "rule") if k in data]
+        if len(kinds) != 1:
+            v.error(ipath, "each entry needs exactly one of 'digest', 'pattern' or 'rule'")
+            continue
+        kind = kinds[0]
+        value = data[kind]
+        if not isinstance(value, str) or not value:
+            v.error(f"{ipath}.{kind}", "expected a non-empty string")
+            continue
+        detectors: frozenset[str] = frozenset()
+        if "detectors" in data:
+            names = data["detectors"]
+            if not isinstance(names, list) or not all(
+                isinstance(n, str) and n in DETECTOR_CATEGORIES for n in names
+            ):
+                v.error(
+                    f"{ipath}.detectors",
+                    f"expected a list of: {', '.join(sorted(DETECTOR_CATEGORIES))}",
+                )
+                continue
+            detectors = frozenset(names)
+        regex: re.Pattern[str] | None = None
+        if kind == "digest":
+            value = value.strip().lower()
+            if not _DIGEST.match(value):
+                v.error(f"{ipath}.digest", "must be the 16-hex digest from the audit log")
+                continue
+        elif kind == "rule":
+            if value not in rule_ids:
+                v.error(f"{ipath}.rule", f"unknown rule ID; known: {', '.join(sorted(rule_ids))}")
+                continue
+        else:
+            if len(value) > 512:
+                v.error(f"{ipath}.pattern", "pattern is longer than 512 characters")
+                continue
+            try:
+                regex = re.compile(value)
+            except re.error:
+                v.error(f"{ipath}.pattern", "not a valid regular expression")
+                continue
+        entries.append(AllowEntry(kind, value, detectors, regex))
+    return tuple(entries)
 
 
 def _parse_detectors(v: _Validator, raw: object) -> dict[str, DetectorConfig]:
@@ -603,6 +734,12 @@ def parse_config(raw: object) -> tuple[EgressVeilConfig | None, list[ValidationI
     v.scan_for_credentials(raw)
     data = v.mapping(raw, "", _ROOT_KEYS)
 
+    if "extends" in data:
+        v.error(
+            "extends",
+            "extends is resolved when a config file is loaded; it cannot be used here",
+        )
+
     if "version" in data:
         version = data["version"]
         if version != SCHEMA_VERSION or isinstance(version, bool):
@@ -618,6 +755,11 @@ def parse_config(raw: object) -> tuple[EgressVeilConfig | None, list[ValidationI
         telemetry_enabled=_parse_telemetry(v, data.get("telemetry")),
     )
     return (config if v.ok else None), v.issues
+
+
+def config_fingerprint(config: EgressVeilConfig) -> str:
+    """Short stable ID of the effective configuration (contains no values)."""
+    return hashlib.sha256(repr(config).encode("utf-8")).hexdigest()[:12]
 
 
 # --------------------------------------------------------------------------- discovery & IO
@@ -688,41 +830,120 @@ def _fail(source: ConfigSource, message: str) -> LoadResult:
     return LoadResult(source, None, [ValidationIssue(IssueLevel.ERROR, "", message)])
 
 
-def load_config(explicit: Path | None = None, cwd: Path | None = None) -> LoadResult:
-    """Discover, read, parse and validate configuration."""
-    source = discover_config(explicit, cwd)
-    if source.path is None:
-        config, issues = parse_config({})
-        return LoadResult(source, config, issues)
+MAX_EXTENDS_DEPTH: Final = 5
+USER_CONFIG_ALIAS: Final = "user"
 
-    path = source.path
+
+class _LoadError(Exception):
+    pass
+
+
+def _os_reason(exc: OSError) -> str:
+    return exc.strerror or type(exc).__name__
+
+
+def _read_yaml(path: Path) -> object:
+    """Read one YAML file safely. Errors never include file content."""
     try:
         size = path.stat().st_size
     except FileNotFoundError:
-        return _fail(source, f"config file not found (from {source.origin})")
+        raise _LoadError("config file not found") from None
     except OSError as exc:
-        return _fail(source, f"cannot access config file: {exc.strerror or type(exc).__name__}")
+        raise _LoadError(f"cannot access config file: {_os_reason(exc)}") from None
     if not path.is_file():
-        return _fail(source, "config path is not a regular file")
+        raise _LoadError("config path is not a regular file")
     if size > MAX_CONFIG_FILE_BYTES:
-        return _fail(source, f"config file exceeds {MAX_CONFIG_FILE_BYTES} bytes")
-
+        raise _LoadError(f"config file exceeds {MAX_CONFIG_FILE_BYTES} bytes")
     try:
         text = path.read_bytes().decode("utf-8")
     except UnicodeDecodeError:
-        return _fail(source, "config file is not valid UTF-8")
+        raise _LoadError("config file is not valid UTF-8") from None
     except OSError as exc:
-        return _fail(source, f"cannot read config file: {exc.strerror or type(exc).__name__}")
-
+        raise _LoadError(f"cannot read config file: {_os_reason(exc)}") from None
     try:
         raw = yaml.safe_load(text)
     except yaml.MarkedYAMLError as exc:
         # Report position only: the problem/context snippets can contain file content.
         mark = exc.problem_mark
         where = f" at line {mark.line + 1}, column {mark.column + 1}" if mark else ""
-        return _fail(source, f"invalid YAML{where}")
+        raise _LoadError(f"invalid YAML{where}") from None
     except yaml.YAMLError:
-        return _fail(source, "invalid YAML")
+        raise _LoadError("invalid YAML") from None
+    return {} if raw is None else raw
 
-    config, issues = parse_config({} if raw is None else raw)
+
+def _merge(base: object, over: object) -> object:
+    """Deep-merge two config documents; ``over`` wins.
+
+    Mappings merge recursively. Lists of mappings with a ``detector`` key
+    (``policy.rules``) merge per detector. Other lists are concatenated
+    without duplicates (allowlists, internal domains).
+    """
+    if isinstance(base, dict) and isinstance(over, dict):
+        merged = dict(base)
+        for key, value in over.items():
+            merged[key] = _merge(merged[key], value) if key in merged else value
+        return merged
+    if isinstance(base, list) and isinstance(over, list):
+        if all(isinstance(x, dict) and "detector" in x for x in [*base, *over]):
+            by_detector: dict[object, object] = {x["detector"]: x for x in base}
+            by_detector.update({x["detector"]: x for x in over})
+            return list(by_detector.values())
+        out = list(base)
+        for item in over:
+            if item not in out:
+                out.append(item)
+        return out
+    return over
+
+
+def _resolve(path: Path, chain: tuple[Path, ...], warnings: list[str]) -> object:
+    resolved = path.resolve()
+    if resolved in chain:
+        raise _LoadError("extends forms a cycle")
+    if len(chain) > MAX_EXTENDS_DEPTH:
+        raise _LoadError(f"extends is nested deeper than {MAX_EXTENDS_DEPTH} levels")
+    raw = _read_yaml(path)
+    if not isinstance(raw, dict) or "extends" not in raw:
+        return raw
+    raw = dict(raw)
+    targets = raw.pop("extends")
+    if isinstance(targets, str):
+        targets = [targets]
+    if not isinstance(targets, list) or not all(isinstance(t, str) and t for t in targets):
+        raise _LoadError("extends must be a path or a list of paths")
+    merged: object = {}
+    for target in targets:
+        if target == USER_CONFIG_ALIAS:
+            parent = user_config_dir() / CONFIG_FILENAME
+            if not parent.is_file() or parent.resolve() == resolved:
+                warnings.append("no user config file found; skipped 'user'")
+                continue
+        else:
+            parent = Path(target).expanduser()
+            if not parent.is_absolute():
+                parent = path.parent / parent
+        try:
+            merged = _merge(merged, _resolve(parent, (*chain, resolved), warnings))
+        except _LoadError as exc:
+            raise _LoadError(f"extends {target!r}: {exc}") from None
+    return _merge(merged, raw)
+
+
+def load_config(explicit: Path | None = None, cwd: Path | None = None) -> LoadResult:
+    """Discover, read, merge (``extends``), parse and validate configuration."""
+    source = discover_config(explicit, cwd)
+    if source.path is None:
+        config, issues = parse_config({})
+        return LoadResult(source, config, issues)
+    warnings: list[str] = []
+    try:
+        raw = _resolve(source.path, (), warnings)
+    except _LoadError as exc:
+        message = str(exc)
+        if message == "config file not found":
+            message = f"config file not found (from {source.origin})"
+        return _fail(source, message)
+    config, issues = parse_config(raw)
+    issues = [ValidationIssue(IssueLevel.WARNING, "extends", w) for w in warnings] + issues
     return LoadResult(source, config, issues)

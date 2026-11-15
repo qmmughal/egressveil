@@ -193,7 +193,7 @@ def test_allowing_secrets_warns() -> None:
         {"policy": {"rules": [{"detector": "secrets", "action": "ALLOW"}]}}
     )
     assert config is not None
-    assert "policy.rules[0].action" in _warnings(issues)
+    assert "policy.rules" in _warnings(issues)
 
 
 def test_internal_domains_validated() -> None:

@@ -6,6 +6,45 @@ intends to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-16
+
+Phase 3: policies, response inspection, and more agents.
+
+### Added
+
+- Policy packs: `balanced` (the default), `redact`, `strict` and `audit`.
+- `policy.allow` allowlists, by keyed `digest` (no value ever goes in the
+  file), `pattern` or `rule`, optionally limited to some `detectors`.
+  `egressveil scan` now prints digests that you can copy into the allowlist.
+- `extends:` to build on shared policy files, and `extends: user` for
+  per-project configs that inherit your personal settings. Merging is per
+  detector for rules, and lists are concatenated.
+- Optional, audit-only response inspection
+  (`gateway.inspect_responses: true`). It reassembles streamed deltas, so
+  values split across SSE events are found, and scans in bounded windows.
+- `egressveil setup <agent>` for `claude-code`, `aider`, `openclaw` and
+  `cursor`.
+- OpenClaw: setup snippet and a doctor check that `openclaw.json` points at
+  the gateway.
+- `egressveil run` warns when the running gateway uses a different
+  configuration. The health endpoint reports a config fingerprint.
+- `docs/policies.md`.
+
+### Changed
+
+- `policy.rules` now **override the pack per detector** instead of
+  replacing the whole rule set. With the default pack this only makes
+  things stricter: categories that a rules list leaves out keep the pack's
+  action instead of falling back to `default_action`.
+- Cursor is now documented as **not supported**. Its model requests come
+  from Cursor's servers, which a loopback gateway can't see.
+
+### Verified
+
+- Claude Code 2.1.325 against the live API. It only uses `HEAD /api/hello`
+  and `POST /v1/messages`. Blocks are shown to the user as is, and the
+  `redact` pack sends only placeholders.
+
 ## [0.3.0] - 2026-11-16
 
 Phase 2: Aider and broader detection.
@@ -102,6 +141,7 @@ limitations.
 - CI: Ruff, strict mypy, and pytest on Python 3.11 and 3.12 across Linux,
   macOS and Windows; a build check; and pip-audit dependency auditing.
 
-[Unreleased]: https://github.com/qmmughal/egressveil/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/qmmughal/egressveil/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/qmmughal/egressveil/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/qmmughal/egressveil/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/qmmughal/egressveil/releases/tag/v0.2.0

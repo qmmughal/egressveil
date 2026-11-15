@@ -57,7 +57,10 @@ def test_policy_engine_default_action() -> None:
     )
     engine = PolicyEngine(cfg.policy)
     assert engine.action_for(Finding("secrets", "r", 0, 1, 1.0)) is PolicyAction.BLOCK
-    assert engine.action_for(Finding("tokens", "r", 0, 1, 1.0)) is PolicyAction.LOG_ONLY
+    # Rules override the pack per detector; tokens keeps the balanced pack's action.
+    assert engine.action_for(Finding("tokens", "r", 0, 1, 1.0)) is PolicyAction.BLOCK
+    # default_action covers categories no rule mentions.
+    assert engine.action_for(Finding("future", "r", 0, 1, 1.0)) is PolicyAction.LOG_ONLY
 
 
 # ----------------------------------------------------------------- clean traffic

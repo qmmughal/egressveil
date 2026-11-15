@@ -13,8 +13,15 @@
 #
 # Run the gateway with:  egressveil serve --config path/to/egressveil.yaml
 # Or run an agent through it:  egressveil run -- claude
+# Policies, allowlists, extends and response inspection: docs/policies.md
 
 version: 1
+
+# Build on other config files (merged first, this file wins). "user" means
+# your user config; handy in a project's ./egressveil.yaml.
+# extends:
+#   - user
+#   - ../security/egressveil-team.yaml
 
 gateway:
   # Loopback only by default. Non-loopback addresses are rejected unless
@@ -34,6 +41,8 @@ gateway:
   # HTTPS_PROXY / NO_PROXY), or an explicit http(s)://host:port proxy.
   # Proxy credentials belong in the environment (use env), never here.
   upstream_proxy: none
+  # Scan model responses too (audit only; responses are never modified).
+  inspect_responses: false
 
 # Upstream endpoints. Hosts must be on the built-in provider allowlist
 # unless allow_custom_upstream is set for that provider. https:// only.
@@ -48,9 +57,13 @@ providers:
     upstream_url: https://api.openai.com
 
 policy:
+  # balanced (default) | redact (keeps interactive sessions flowing)
+  # | strict | audit (log only, for evaluation)
+  pack: balanced
   # Applied to findings from detectors with no explicit rule.
   # One of: ALLOW, REDACT, BLOCK, LOG_ONLY
   default_action: REDACT
+  # Rules override the pack per detector.
   rules:
     - detector: secrets
       action: BLOCK
@@ -60,6 +73,11 @@ policy:
       action: REDACT
     - detector: internal_hostnames
       action: REDACT
+  # Suppress checked false positives. Digests come from the audit log or
+  # `egressveil scan`; never put the value itself here.
+  allow:
+    - rule: private_ipv4
+      comment: example entry; remove if you enable include_private_ips
 
 detectors:
   secrets:

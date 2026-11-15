@@ -1,6 +1,6 @@
 # Threat Model
 
-> Status: reviewed for Phase 2 (v0.3.0). This model will be revisited
+> Status: reviewed for Phase 3 (v0.4.0). This model will be revisited
 > before each phase ships.
 
 ## Assets
@@ -22,6 +22,8 @@
 | **Parser differential** smuggling | A duplicate JSON key, where EgressVeil scans one value and the upstream reads the other | Duplicate keys, `NaN` and excessive nesting are rejected, and JSON escapes are decoded before scanning |
 | **DNS rebinding / browser CSRF** to the local gateway | A web page resolves its domain to `127.0.0.1` and posts to the gateway | Host-header allowlist, browser `Origin` requests rejected, JSON content type required |
 | **Truncated stream accepted as complete** | Upstream fails mid-response | The client connection is aborted, not ended cleanly |
+| **Allowlist used as a leak channel** | Someone writes a real key into `policy.allow` to silence a finding, and the config file gets shared | Allowlist by keyed digest instead of value. Patterns pass the credential check |
+| **Sensitive data echoed back by the model** | A response repeats a secret or personal data | Optional `inspect_responses` audits it (audit-only) |
 | **Misdirected upstream** | Config or environment points the agent at a look-alike host | Per-provider https host allowlist |
 | **Gateway exposure** on the LAN | The gateway listens on `0.0.0.0` and other hosts relay through it | Loopback-only default, with an explicit opt-in that warns |
 | **Secrets leaking through logs** | The audit log or an error message contains the matched value | Findings store offsets only, config rejects raw-value logging, and errors name locations, not values |

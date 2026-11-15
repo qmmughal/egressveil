@@ -44,7 +44,8 @@ URL.
 | `egressveil.providers.anthropic`, `.openai` | One adapter per API: inspected routes, opaque, signed and encrypted fields, error shape |
 | `egressveil.detectors.pii`, `.hostnames` | PII rules (checksum-validated) and the internal-hostname detector |
 | `egressveil.launcher` | `egressveil run`: starts the gateway on demand, sets the agent's environment, stops the gateway afterwards |
-| `egressveil.doctor` | Environment checks and the canary self-test |
+| `egressveil.doctor` | Environment checks, the canary self-test and the OpenClaw config check |
+| `egressveil.responses` | Optional, audit-only response scanning: SSE delta reassembly and windowed scanning |
 | `egressveil.detectors` | The `Detector` protocol, `Finding`, span merging, and the `patterns` secret and token rules |
 | `egressveil.policy.engine` | Maps each finding to an action. The most restrictive action wins |
 | `egressveil.redactor` | Keyed, stable placeholders |

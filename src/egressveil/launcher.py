@@ -17,7 +17,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import IO, Final
 
-from egressveil.config import EgressVeilConfig
+from egressveil.config import EgressVeilConfig, config_fingerprint
 from egressveil.doctor import OPENAI_MOUNT_PATH, gateway_base_url, gateway_health
 
 __all__ = ["LaunchError", "agent_env", "run_agent"]
@@ -115,14 +115,21 @@ def run_agent(
         raise LaunchError(f"'{command[0]}' was not found on PATH")
 
     spawned: tuple[subprocess.Popen[bytes], IO[bytes], Path] | None = None
-    if gateway_health(cfg) is None:
+    out = notify or sys.stderr
+    health = gateway_health(cfg)
+    if health is None:
         if not start_gateway:
             raise LaunchError("the gateway is not running (start it with 'egressveil serve')")
         spawned = _spawn_gateway(cfg, config_path)
         state = f"started; log: {spawned[2]}"
     else:
         state = "already running"
-    out = notify or sys.stderr
+        if health.get("config") != config_fingerprint(cfg):
+            print(
+                "egressveil: warning: the running gateway was started with a different "
+                "configuration than this directory's; restart it to apply this one",
+                file=out,
+            )
     print(f"egressveil: routing {command[0]} through {gateway_base_url(cfg)} ({state})", file=out)
 
     try:

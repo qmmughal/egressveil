@@ -22,6 +22,7 @@ __all__ = [
     "Detector",
     "Finding",
     "build_detectors",
+    "known_rule_ids",
     "merge_spans",
 ]
 
@@ -100,3 +101,12 @@ def build_detectors(
             )
         )
     return detectors
+
+
+def known_rule_ids() -> frozenset[str]:
+    """Every rule ID any detector can emit (used to validate allowlist entries)."""
+    from egressveil.detectors.patterns import SECRET_RULES, TOKEN_RULES
+    from egressveil.detectors.pii import PII_RULES
+
+    ids = {r.rule_id for r in (*SECRET_RULES, *TOKEN_RULES, *PII_RULES)}
+    return frozenset(ids | {"internal_domain", "internal_suffix", "private_ipv4"})

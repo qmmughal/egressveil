@@ -62,8 +62,9 @@ whether it is **implemented** (as of Phase 1) or **planned**.
   request uninspectable. This guarantees EgressVeil inspects the same
   document the upstream parses.
 - **Not inspected:** headers. The agent's `x-api-key` / `Authorization`
-  header is forwarded untouched. Response bodies are also not inspected
-  (planned).
+  header is forwarded untouched.
+- **Optional:** responses (`gateway.inspect_responses: true`). They are
+  scanned and audited but never modified (see section 13).
 
 ## 4. Detection
 
@@ -173,6 +174,21 @@ it can inspect. Validation warns when it is enabled.
   - Access logging is disabled, because access logs would record query
     strings.
 
+## 7a. Allowlists and policy packs
+
+- **Packs** (`balanced`, `redact`, `strict`, `audit`) set every category's
+  action. `policy.rules` override a pack per detector, so a rule can never
+  silently drop protection for the other categories. The `audit` pack warns
+  at validation, and so does `ALLOW`/`LOG_ONLY` for secrets or tokens.
+- **Allowlist entries** suppress findings by `digest`, `pattern` or `rule`.
+  A digest entry lets you allow a known value without writing it into a
+  config file. Because digests are keyed with the local key, a leaked
+  config file doesn't help anyone guess or confirm a value. Patterns go
+  through the same credential check as every other config value.
+- **`extends`** files are size-capped and read with `safe_load`. Nesting is
+  limited to five levels and cycles are rejected. The merged result is
+  validated as one document.
+
 ## 8. No telemetry
 
 EgressVeil contains no telemetry, analytics or update pings.
@@ -213,3 +229,18 @@ will be opt-in, limited to display-only text, and documented separately.
 EgressVeil can protect only what passes through it. The
 [threat model](threat-model.md) and [integrations](integrations.md) documents
 list what bypasses it. Do not present EgressVeil as complete egress control.
+
+## 13. Response inspection (optional)
+
+- Off by default. When on, the gateway asks the upstream for uncompressed
+  responses so it can inspect them without decoding a second copy.
+- SSE streams are parsed event by event. Text under `delta` keys is
+  concatenated before scanning, so values split across events are found.
+  Scanning runs in 64 KiB windows with a 4 KiB overlap. JSON responses are
+  parsed up to `max_request_body_bytes`; anything larger is marked
+  `truncated` and not inspected.
+- Findings are audited as `response_findings` with the `policy_action` that
+  would apply. They never contain values.
+- Responses are **never modified**. Rewriting a stream mid-flight could
+  corrupt tool calls, and there is deliberately no un-redaction path (see
+  section 9).

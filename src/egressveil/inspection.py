@@ -28,7 +28,7 @@ from egressveil.providers.base import (
 
 if TYPE_CHECKING:
     from egressveil.audit import AuditLogger
-    from egressveil.config import EgressVeilConfig
+    from egressveil.config import AllowEntry, EgressVeilConfig
     from egressveil.detectors import Detector, Finding
     from egressveil.redactor import Redactor
 
@@ -125,6 +125,7 @@ class Inspector:
         audit: AuditLogger,
         mode: GatewayMode,
         allow_opaque_content: bool,
+        allow: Sequence[AllowEntry] = (),
     ) -> None:
         self._detectors = tuple(detectors)
         self._engine = engine
@@ -132,6 +133,7 @@ class Inspector:
         self._audit = audit
         self._strict = mode is GatewayMode.STRICT
         self._allow_opaque = allow_opaque_content
+        self._allow = tuple(allow)
 
     @classmethod
     def from_config(
@@ -144,6 +146,7 @@ class Inspector:
             audit=audit,
             mode=config.gateway.mode,
             allow_opaque_content=config.gateway.allow_opaque_content,
+            allow=config.policy.allow,
         )
 
     # ------------------------------------------------------------------ text
@@ -153,6 +156,27 @@ class Inspector:
         for detector in self._detectors:
             findings.extend(detector.scan(text))
         return findings
+
+    def digest(self, value: str) -> str:
+        return self._audit.digest(value)
+
+    def is_allowed(self, finding: Finding, value: str, digest: str) -> bool:
+        """True when a ``policy.allow`` entry suppresses this finding."""
+        return any(e.matches(finding.detector, finding.rule_id, value, digest) for e in self._allow)
+
+    def evaluate_text(self, text: str) -> list[tuple[Finding, PolicyAction, str]]:
+        """Findings in ``text`` with their action and digest, after allowlist and ALLOW."""
+        out: list[tuple[Finding, PolicyAction, str]] = []
+        for f in self.scan_text(text):
+            action = self.action_for(f)
+            if action is PolicyAction.ALLOW:
+                continue
+            value = text[f.start : f.end]
+            digest = self._audit.digest(value)
+            if self.is_allowed(f, value, digest):
+                continue
+            out.append((f, action, digest))
+        return out
 
     def action_for(self, finding: Finding) -> PolicyAction:
         return self._engine.action_for(finding)
@@ -230,21 +254,13 @@ class Inspector:
         to_redact: list[tuple[TextField, list[Finding]]] = []
         for text_field in fields:
             redactable: list[Finding] = []
-            for f in self.scan_text(text_field.text):
-                action = self.action_for(f)
-                if action is PolicyAction.ALLOW:
-                    continue
+            for f, action, digest in self.evaluate_text(text_field.text):
                 signed = text_field.signed and action is not PolicyAction.LOG_ONLY
                 if signed:
                     action = PolicyAction.LOG_ONLY
                 located.append(
                     LocatedFinding(
-                        f.detector,
-                        f.rule_id,
-                        text_field.location,
-                        action,
-                        self._audit.digest(text_field.text[f.start : f.end]),
-                        signed=signed,
+                        f.detector, f.rule_id, text_field.location, action, digest, signed=signed
                     )
                 )
                 if action is PolicyAction.REDACT:
@@ -264,10 +280,7 @@ class Inspector:
     def _scan_url(self, query: str) -> list[LocatedFinding]:
         decoded = unquote_plus(query)
         out: list[LocatedFinding] = []
-        for f in self.scan_text(decoded):
-            action = self.action_for(f)
-            if action is PolicyAction.ALLOW:
-                continue
+        for f, action, digest in self.evaluate_text(decoded):
             # URLs cannot be rewritten safely, so REDACT escalates to BLOCK.
             escalated = action is PolicyAction.REDACT
             out.append(
@@ -276,7 +289,7 @@ class Inspector:
                     f.rule_id,
                     URL_LOCATION,
                     PolicyAction.BLOCK if escalated else action,
-                    self._audit.digest(decoded[f.start : f.end]),
+                    digest,
                     escalated=escalated,
                 )
             )

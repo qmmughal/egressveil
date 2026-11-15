@@ -119,16 +119,14 @@ or adjust the EgressVeil policy. (request ev_3c1f0a9e2b7d4c11)
 | `egressveil scan` | Run the detectors and policy over files or stdin. Prints locations and rule IDs, never values |
 | `egressveil doctor` | Checks Python, config, whether the gateway is running, an end-to-end self-test (a random canary credential must be blocked locally), the audit location, proxy settings, the base-URL environment variables, and the active detectors |
 | `egressveil config validate` | A strict schema with secure defaults. Output never contains values |
+| Policy packs | `balanced` (the default), `redact` (keeps interactive sessions flowing), `strict` and `audit` (evaluation only). `policy.rules` override a pack per detector |
+| Allowlists | Allow a checked false positive by its keyed **digest**, without ever writing the value into a config file, or by `pattern` or `rule` |
+| Shared and per-project config | `extends:` other files or your `user` config. A project's `egressveil.yaml` adds project-specific settings |
+| Response inspection (optional) | `gateway.inspect_responses: true` scans model responses, including streamed deltas reassembled across events. Findings are audited; responses are never modified |
+| `egressveil setup <agent>` | Setup instructions for `claude-code`, `aider`, `openclaw` and `cursor` |
 
-### Planned
-
-| Feature | Phase |
-| --- | --- |
-| OpenClaw integration | 3 |
-| Cursor: documented, experimental support where technically possible | 3 |
-| Response-side inspection | 3 |
-
-The details are in [docs/roadmap.md](docs/roadmap.md).
+See [docs/policies.md](docs/policies.md) for packs, allowlists, `extends`
+and response inspection. Future ideas are in [docs/roadmap.md](docs/roadmap.md).
 
 ## Security architecture
 
@@ -181,7 +179,7 @@ and carry PyPI attestations. The files on the
 signed build provenance, which you can verify with:
 
 ```bash
-gh attestation verify egressveil-0.3.0-py3-none-any.whl --repo qmmughal/egressveil
+gh attestation verify egressveil-0.4.0-py3-none-any.whl --repo qmmughal/egressveil
 ```
 
 To work on EgressVeil itself, install it from source:
@@ -201,7 +199,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
 
 ```console
 $ egressveil serve
-EgressVeil 0.3.0 gateway
+EgressVeil 0.4.0 gateway
   listening   http://127.0.0.1:8787
   anthropic   /        -> https://api.anthropic.com
   openai      /openai  -> https://api.openai.com
@@ -255,10 +253,10 @@ All options are documented in
 
 | Agent | Status | Routing mechanism | Coverage |
 | --- | --- | --- | --- |
-| **Claude Code** | **Available (pre-alpha)** | `ANTHROPIC_BASE_URL=http://127.0.0.1:8787` | Anthropic Messages API calls only. Not tool, shell, web or MCP traffic |
+| **Claude Code** | **Available (pre-alpha)**, verified with Claude Code 2.1.325 | `egressveil run -- claude`, or `ANTHROPIC_BASE_URL=http://127.0.0.1:8787` | Anthropic Messages API calls only. Not tool, shell, web or MCP traffic |
 | **Aider** | **Available (pre-alpha)** | `egressveil run -- aider`, or `ANTHROPIC_BASE_URL` / `OPENAI_API_BASE=http://127.0.0.1:8787/openai/v1` | Anthropic and OpenAI-compatible API calls. Not git, `/web` or shell traffic |
-| **OpenClaw** | Future | To be determined | Not supported yet |
-| **Cursor** | Limited and experimental | Most model traffic goes through Cursor's own backend | Expected to be partial at best. See the docs |
+| **OpenClaw** | Available (configuration documented, not yet verified end to end) | `models.providers.<id>.baseUrl` in `~/.openclaw/openclaw.json`. Run `egressveil setup openclaw` | Model API calls through the configured providers |
+| **Cursor** | **Not supported** | None. Cursor sends model requests from its own servers, so a local gateway can't see them | None. Run `egressveil setup cursor` for the details |
 
 Routing details and their limitations are in [docs/integrations.md](docs/integrations.md).
 
@@ -272,7 +270,8 @@ Routing details and their limitations are in [docs/integrations.md](docs/integra
   international and US). It is not a complete data-loss-prevention system.
 - Images and PDFs cannot be inspected. Strict mode blocks them unless you
   set `gateway.allow_opaque_content: true`.
-- Model responses are not inspected.
+- Model responses are only inspected when `gateway.inspect_responses` is
+  on, and even then they are audited, never modified.
 - By default the gateway connects directly to the upstream and ignores
   `HTTPS_PROXY`. Set `gateway.upstream_proxy` to use a proxy.
 - EgressVeil does not perform TLS interception and does not install a root CA.
@@ -287,8 +286,8 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 | --- | --- |
 | 0, done | Repository, packaging, CI, config schema, CLI, doctor, threat model |
 | 1, done | Anthropic gateway for Claude Code: streaming proxy, secret and token detectors, policy, redaction, audit, `scan` |
-| **2, current** | OpenAI-compatible parser for Aider, PII and hostname detectors, `egressveil run`, doctor self-test, upstream proxy |
-| 3 | OpenClaw, experimental Cursor support, policy packs, response inspection |
+| 2, done | OpenAI-compatible parser for Aider, PII and hostname detectors, `egressveil run`, doctor self-test, upstream proxy |
+| 3, done | OpenClaw, Cursor assessment, policy packs, allowlists, `extends`, response inspection, live Claude Code validation |
 
 See [docs/roadmap.md](docs/roadmap.md).
 

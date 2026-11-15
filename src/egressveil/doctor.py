@@ -223,6 +223,31 @@ def _check_tool(names: tuple[str, ...], label: str, extra: str) -> Check:
     return Check(Status.INFO, label, f"'{names[0]}' not found on PATH; {extra}")
 
 
+def openclaw_config_path() -> Path:
+    return Path.home() / ".openclaw" / "openclaw.json"
+
+
+def _check_openclaw(cfg: EgressVeilConfig) -> Check:
+    path = openclaw_config_path()
+    if not path.is_file():
+        found = shutil.which("openclaw") is not None
+        detail = "'openclaw' found on PATH" if found else "not installed"
+        return Check(Status.INFO, "openclaw", f"{detail}; see 'egressveil setup openclaw'")
+    try:
+        text = path.read_bytes()[: 1024 * 1024].decode("utf-8", errors="replace")
+    except OSError:
+        return Check(Status.WARN, "openclaw", f"{path} is not readable")
+    port = cfg.gateway.listen_port
+    if any(f"{host}:{port}" in text for host in ("127.0.0.1", "localhost", "[::1]")):
+        return Check(Status.OK, "openclaw", "config has a provider baseUrl pointing at the gateway")
+    return Check(
+        Status.WARN,
+        "openclaw",
+        "config found, but no provider baseUrl points at the gateway; see 'egressveil setup "
+        "openclaw'",
+    )
+
+
 def _integration_checks(cfg: EgressVeilConfig) -> list[Check]:
     anthropic = _base_url_state("ANTHROPIC_BASE_URL", cfg)
     openai = "; ".join(
@@ -231,7 +256,7 @@ def _integration_checks(cfg: EgressVeilConfig) -> list[Check]:
     return [
         _check_tool(("claude",), "claude code", anthropic),
         _check_tool(("aider",), "aider", f"{anthropic}; {openai}"),
-        _check_tool(("openclaw",), "openclaw", "see docs/integrations.md"),
+        _check_openclaw(cfg),
         _check_tool(
             ("cursor",), "cursor", "not supported: Cursor sends model traffic from its servers"
         ),
