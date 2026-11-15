@@ -89,4 +89,8 @@ def test_uninstall_dry_run() -> None:
 
 
 def test_serve_has_log_file_option() -> None:
-    assert "--log-file" in CliRunner().invoke(app, ["serve", "--help"]).output
+    # Inspect the registered command, not --help text (CI forces ANSI colours).
+    import typer.main
+
+    serve_cmd = typer.main.get_command(app).commands["serve"]  # type: ignore[attr-defined]
+    assert "--log-file" in {opt for p in serve_cmd.params for opt in p.opts}

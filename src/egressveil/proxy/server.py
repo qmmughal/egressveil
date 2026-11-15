@@ -364,6 +364,10 @@ class _Gateway:
             headers = [(k, v) for k, v in headers if k.lower() != "accept-encoding"]
             headers.append(("Accept-Encoding", "identity"))
         try:
+            # ``target`` keeps the configured upstream's scheme, host and port:
+            # _upstream_target() builds it from the inspected path only and
+            # refuses anything whose origin would differ (tests/test_http_edges.py).
+            # Forwarding the client's path is the purpose of a reverse proxy.
             upstream = await self.session.request(
                 request.method,
                 target,
