@@ -6,7 +6,9 @@ name: Release
 # PyPI publishing uses Trusted Publishing (OIDC, no API tokens). It only runs
 # when the repository variable PYPI_PUBLISH is "true", and it needs approval
 # in the "pypi" environment. To set it up once, see docs/releasing.md. After
-# that, publish an existing tag with "Run workflow" (workflow_dispatch).
+# that, publish an existing tag by running this workflow FROM THE TAG
+# (gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z); the pypi
+# environment only accepts v* tags.
 
 on:
   push:

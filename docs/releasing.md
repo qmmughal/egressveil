@@ -64,13 +64,31 @@ the account owner can do.
    gh variable set PYPI_PUBLISH --body true --repo qmmughal/egressveil
    ```
 
-4. Publish an existing tag. Go to **Actions → Release → Run workflow**, enter
-   for example `v0.2.0`, and approve the deployment to the `pypi`
-   environment when GitHub asks for it. Or from the command line:
+4. Publish an existing tag. The `pypi` environment accepts only `v*` tags,
+   so the run must start **from the tag**, not from a branch:
 
    ```bash
-   gh workflow run release.yml -f tag=v0.2.0 --repo qmmughal/egressveil
+   gh workflow run release.yml --ref v0.2.0 -f tag=v0.2.0 --repo qmmughal/egressveil
    ```
+
+   In the web UI, go to **Actions → Release → Run workflow** and choose the
+   tag `v0.2.0` in the **Use workflow from** dropdown, not `main`. Then
+   approve the deployment to `pypi` when GitHub asks for it.
+
+   If the tag's own release run failed only at the PyPI step (for example
+   because the publisher wasn't registered yet), you can re-run just that
+   job instead:
+
+   ```bash
+   gh run rerun <run-id> --failed --repo qmmughal/egressveil
+   ```
+
+### Troubleshooting `invalid-publisher`
+
+PyPI found no trusted publisher matching the run. The failed job's log
+shows the claims GitHub sent. Make sure the publisher on **pypi.org** (not
+TestPyPI) has exactly these values: owner `qmmughal`, repository
+`egressveil`, workflow `release.yml` (the file name), and environment `pypi`.
 
 From then on, pushing a tag publishes to PyPI automatically, after approval.
 
