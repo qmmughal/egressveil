@@ -130,7 +130,9 @@ or adjust the EgressVeil policy. (request ev_3c1f0a9e2b7d4c11)
 | `egressveil setup <agent>` | Setup instructions for `claude-code`, `aider`, `openclaw` and `cursor` |
 
 See [docs/policies.md](docs/policies.md) for packs, allowlists, `extends`
-and response inspection. Future ideas are in [docs/roadmap.md](docs/roadmap.md).
+and response inspection. Reference docs:
+[configuration](docs/configuration.md) · [CLI](docs/cli.md) ·
+[audit log format](docs/audit-log.md) · [versioning policy](docs/versioning.md). Future ideas are in [docs/roadmap.md](docs/roadmap.md).
 
 ## Security architecture
 
@@ -203,7 +205,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
 
 ```console
 $ egressveil serve
-EgressVeil 0.5.0 gateway
+EgressVeil 0.6.0 gateway
   listening   http://127.0.0.1:8787
   anthropic   /        -> https://api.anthropic.com
   openai      /openai  -> https://api.openai.com

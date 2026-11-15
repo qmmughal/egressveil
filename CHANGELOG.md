@@ -6,6 +6,24 @@ intends to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-16
+
+First step on the path to 1.0: frozen, documented and tested public
+contracts.
+
+### Added
+
+- Every audit event now has `"schema_version": 1`. The JSON Schema is
+  published as `egressveil/schemas/audit-event-v1.schema.json` (shipped in
+  the package), and the health endpoint has `health-v1.schema.json`.
+- Reference docs: `docs/configuration.md` (every key), `docs/cli.md` (every
+  command, flag and exit code), `docs/audit-log.md` (every field, plus the
+  guarantees) and `docs/versioning.md` (what is public, semver, deprecation).
+- Contract tests: real gateway traffic covering every outcome is validated
+  against the published schemas, and the tests fail if a config key or CLI
+  command is undocumented.
+- A "Path to 1.0" plan in `docs/roadmap.md`.
+
 ## [0.5.0] - 2026-11-16
 
 EgressVeil moves from pre-alpha to **beta**. Every roadmap phase is
@@ -161,7 +179,8 @@ limitations.
 - CI: Ruff, strict mypy, and pytest on Python 3.11 and 3.12 across Linux,
   macOS and Windows; a build check; and pip-audit dependency auditing.
 
-[Unreleased]: https://github.com/qmmughal/egressveil/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/qmmughal/egressveil/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/qmmughal/egressveil/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/qmmughal/egressveil/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/qmmughal/egressveil/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/qmmughal/egressveil/compare/v0.2.0...v0.3.0

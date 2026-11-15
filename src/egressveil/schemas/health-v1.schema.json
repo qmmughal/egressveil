@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/qmmughal/egressveil/schemas/health-v1.schema.json",
+  "title": "EgressVeil health endpoint (GET /_egressveil/health, schema_version 1)",
+  "description": "Answered locally by the gateway; never forwarded. Consumers must ignore unknown fields.",
+  "type": "object",
+  "required": ["schema_version", "status", "service", "version", "mode", "providers", "config", "inspect_responses"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 1 },
+    "status": { "const": "ok" },
+    "service": { "const": "egressveil" },
+    "version": { "type": "string" },
+    "mode": { "enum": ["strict", "permissive"] },
+    "providers": { "type": "array", "items": { "enum": ["anthropic", "openai"] } },
+    "config": { "type": "string", "pattern": "^[0-9a-f]{12}$", "description": "Fingerprint of the effective configuration (contains no values)." },
+    "inspect_responses": { "type": "boolean" }
+  }
+}

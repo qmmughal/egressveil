@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/qmmughal/egressveil/schemas/audit-event-v1.schema.json",
+  "title": "EgressVeil audit event (schema_version 1)",
+  "description": "One JSON object per line in the audit log. Contains no request bodies, headers, query strings or raw matched values. Consumers must ignore unknown fields: minor releases may add optional fields.",
+  "type": "object",
+  "required": ["schema_version", "ts", "request_id", "provider", "method", "path", "duration_ms", "outcome"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 1 },
+    "ts": { "type": "string", "description": "UTC timestamp, ISO 8601 with milliseconds." },
+    "request_id": { "type": "string", "pattern": "^ev_[0-9a-f]{16}$" },
+    "provider": { "enum": ["anthropic", "openai"] },
+    "method": { "type": "string" },
+    "path": { "type": "string", "description": "Gateway path without the query string." },
+    "duration_ms": { "type": "number", "minimum": 0 },
+    "outcome": { "enum": ["forward", "redact", "block", "error"] },
+    "reason": {
+      "type": "string",
+      "description": "Machine code: policy, unsupported_route, unsupported_content_type, unsupported_content_encoding, invalid_json, duplicate_key, nesting_too_deep, opaque_content, opaque_content_forwarded, detector_error, body_too_large, bad_host, browser_origin, provider_disabled, upstream_timeout, upstream_unreachable."
+    },
+    "route": { "enum": ["json_inspect", "bodyless", "unsupported"] },
+    "inspected": { "type": "boolean" },
+    "bytes_in": { "type": "integer", "minimum": 0 },
+    "upstream_status": { "type": "integer" },
+    "stream_complete": { "type": "boolean" },
+    "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+    "opaque": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["location", "kind"],
+        "additionalProperties": false,
+        "properties": { "location": { "type": "string" }, "kind": { "type": "string" } }
+      }
+    },
+    "response_findings": { "type": "array", "items": { "$ref": "#/$defs/response_finding" } },
+    "response_inspection": { "enum": ["truncated", "skipped"] }
+  },
+  "$defs": {
+    "detector": { "enum": ["secrets", "tokens", "pii", "internal_hostnames"] },
+    "action": { "enum": ["ALLOW", "REDACT", "BLOCK", "LOG_ONLY"] },
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+    "finding": {
+      "type": "object",
+      "required": ["detector", "rule_id", "location", "action", "digest"],
+      "additionalProperties": false,
+      "properties": {
+        "detector": { "$ref": "#/$defs/detector" },
+        "rule_id": { "type": "string" },
+        "location": { "type": "string", "description": "JSON location in the request body, or $url for the query string." },
+        "action": { "$ref": "#/$defs/action" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "escalated": { "const": true },
+        "signed": { "const": true }
+      }
+    },
+    "response_finding": {
+      "type": "object",
+      "required": ["detector", "rule_id", "location", "action", "policy_action", "digest"],
+      "additionalProperties": false,
+      "properties": {
+        "detector": { "$ref": "#/$defs/detector" },
+        "rule_id": { "type": "string" },
+        "location": { "const": "$response" },
+        "action": { "const": "LOG_ONLY" },
+        "policy_action": { "$ref": "#/$defs/action" },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    }
+  }
+}

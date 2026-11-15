@@ -39,6 +39,7 @@ __all__ = ["HEALTH_PATH", "GatewayComponents", "build_components", "create_app"]
 log = logging.getLogger("egressveil")
 
 HEALTH_PATH: Final = "/_egressveil/health"
+HEALTH_SCHEMA_VERSION: Final = 1
 INTERNAL_PREFIX: Final = "/_egressveil/"
 REQUEST_ID_HEADER: Final = "x-egressveil-request-id"
 DECISION_HEADER: Final = "x-egressveil-decision"
@@ -200,6 +201,7 @@ class _Gateway:
             if request.path == HEALTH_PATH and request.method in {"GET", "HEAD"}:
                 return web.json_response(
                     {
+                        "schema_version": HEALTH_SCHEMA_VERSION,
                         "status": "ok",
                         "service": "egressveil",
                         "version": __version__,

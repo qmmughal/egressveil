@@ -73,12 +73,54 @@ Known gaps carried forward:
 - [x] Signed GitHub releases with build provenance (v0.2.0)
 - [x] PyPI release via Trusted Publishing (`pip install egressveil`, v0.2.0)
 
+## Path to 1.0
+
+A 1.0 release is a promise. The config, CLI and audit formats won't break
+without a major version, and the protection claims are measured, not
+assumed.
+
+### 0.6: Frozen contracts (done)
+
+- [x] Audit events carry `schema_version`, and the published JSON Schema
+      ships in the package. Tests validate real gateway output against it
+- [x] Versioned health endpoint schema
+- [x] Configuration and CLI references (`docs/configuration.md`,
+      `docs/cli.md`), with tests that fail if a key or command is
+      undocumented
+- [x] Versioning and deprecation policy (`docs/versioning.md`)
+
+### 0.7: Measured quality
+
+- [ ] A detection benchmark: recall on a labelled positive corpus and
+      false-positive rate on real-world code, with the numbers published
+- [ ] Property-based fuzzing of the request parser and the inspector
+- [ ] Regex timing tests on adversarial input for every rule
+- [ ] Performance and soak numbers: latency overhead and memory during long
+      streams
+
+### 0.8: Hardening
+
+- [ ] CodeQL and OpenSSF Scorecard in CI, and an SBOM with every release
+- [ ] HTTP edge-case tests: request smuggling, malformed chunked bodies,
+      oversized headers
+- [ ] Optional background service: Windows Task Scheduler, macOS launchd,
+      Linux systemd `--user`
+
+### 1.0.0-rc: Live validation
+
+- [ ] A live Claude Code session with a real key, covering the tool-result
+      path. Needs the maintainer's API key
+- [ ] OpenClaw end to end
+- [ ] Re-validate on the latest Claude Code and Aider releases
+
+### 1.0.0
+
+- [ ] An rc feedback window, with no open critical or high-severity issues
+
 ## Future ideas
 
 These are not scheduled. Contributions are welcome.
 
-- A live Claude Code session with a real key, covering the tool-result path
-- An end-to-end report on OpenClaw from a running installation
 - More national ID formats for the `pii` detector
 - Optional redaction of streamed responses (currently audit-only)
 - Packaged policy packs that are shared and versioned like dependencies

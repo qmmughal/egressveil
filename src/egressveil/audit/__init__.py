@@ -25,9 +25,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
-__all__ = ["KEY_FILENAME", "AuditLogger", "load_or_create_key"]
+__all__ = ["AUDIT_SCHEMA_VERSION", "KEY_FILENAME", "AuditLogger", "load_or_create_key"]
 
 KEY_FILENAME: Final = "egressveil.key"
+AUDIT_SCHEMA_VERSION: Final = 1
+"""Version of the audit event format (docs/audit-log.md). Bumped only on breaking changes."""
 _KEY_BYTES: Final = 32
 
 
@@ -86,7 +88,11 @@ class AuditLogger:
     def write(self, event: Mapping[str, Any]) -> None:
         if self._path is None:
             return
-        record = {"ts": datetime.now(UTC).isoformat(timespec="milliseconds"), **event}
+        record = {
+            "schema_version": AUDIT_SCHEMA_VERSION,
+            "ts": datetime.now(UTC).isoformat(timespec="milliseconds"),
+            **event,
+        }
         line = json.dumps(record, ensure_ascii=True, separators=(",", ":")) + "\n"
         try:
             with self._lock:
