@@ -9,6 +9,13 @@ EgressVeil is a local-first, open-source security gateway. It detects sensitive
 information in the API traffic that supported AI coding agents send to LLM
 providers, and redacts or blocks it before it leaves your machine.
 
+**Free and open source, for everyone.** EgressVeil is released under the
+[MIT License](LICENSE). You can use it, modify it, redistribute it and build
+commercial products on it at no cost. There are no paid tiers, accounts,
+license keys or usage limits. It runs entirely on your machine, has no
+telemetry, and its only network connection is to the LLM provider you
+configure.
+
 > **Project status: pre-alpha (Phase 1).** EgressVeil now runs as a local
 > gateway for the **Anthropic Messages API**, the API Claude Code uses. It
 > detects **secrets and tokens** and blocks or redacts them according to your
@@ -143,8 +150,32 @@ Each control, and whether it is implemented, is described in
 
 ## Installation
 
-EgressVeil requires Python 3.11 or newer. It is **not yet published on PyPI**,
-so install it from source:
+EgressVeil requires Python 3.11 to 3.14 and runs on Windows, macOS and Linux.
+
+The recommended way to install it is with [pipx](https://pipx.pypa.io/),
+which puts the CLI in its own isolated environment:
+
+```bash
+pipx install "git+https://github.com/qmmughal/egressveil.git@v0.2.0"
+```
+
+Or with pip, into the virtual environment of your choice:
+
+```bash
+pip install "egressveil @ https://github.com/qmmughal/egressveil/releases/download/v0.2.0/egressveil-0.2.0-py3-none-any.whl"
+```
+
+Every release file on the [Releases page](https://github.com/qmmughal/egressveil/releases)
+is built by GitHub Actions and has signed build provenance. You can verify a
+download with:
+
+```bash
+gh attestation verify egressveil-0.2.0-py3-none-any.whl --repo qmmughal/egressveil
+```
+
+A PyPI package (`pip install egressveil`) is planned. See [docs/releasing.md](docs/releasing.md).
+
+To work on EgressVeil itself, install it from source:
 
 ```bash
 git clone https://github.com/qmmughal/egressveil.git
@@ -152,16 +183,16 @@ cd egressveil
 python -m venv .venv
 # Windows:      .venv\Scripts\activate
 # Linux/macOS:  source .venv/bin/activate
-python -m pip install -e .
+python -m pip install -e ".[dev]"
 ```
 
-For development, install with `".[dev]"` instead (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
 
 ## Usage
 
 ```console
 $ egressveil serve
-EgressVeil 0.2.0.dev0 gateway
+EgressVeil 0.2.0 gateway
   listening   http://127.0.0.1:8787
   upstream    https://api.anthropic.com
   mode        strict
@@ -247,12 +278,15 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 See [docs/roadmap.md](docs/roadmap.md).
 
-## Contributing
+## Contributing and support
 
-Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) and
-the [Code of Conduct](CODE_OF_CONDUCT.md). Never include real credentials in
-issues, tests or fixtures.
+Contributions of any size are welcome, including detectors, false-positive
+reports, docs and integrations. Please read [CONTRIBUTING.md](CONTRIBUTING.md)
+and the [Code of Conduct](CODE_OF_CONDUCT.md). For questions, see
+[SUPPORT.md](SUPPORT.md). Never include real credentials in issues, tests or
+fixtures.
 
 ## License
 
-[MIT](LICENSE) © 2026 EgressVeil contributors.
+EgressVeil is free software, released under the [MIT License](LICENSE).
+© 2026 EgressVeil contributors.

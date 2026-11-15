@@ -54,7 +54,9 @@ Known gaps carried forward:
       coverage documented
 - [ ] Shareable policy packs and per-project overrides
 - [ ] Optional response-side inspection
-- [ ] PyPI release with signed provenance, once the name is confirmed
+- [x] Signed GitHub releases with build provenance (v0.2.0)
+- [ ] PyPI release via Trusted Publishing (workflow ready; needs the one-time
+      PyPI setup in docs/releasing.md)
 
 ## Non-goals
 

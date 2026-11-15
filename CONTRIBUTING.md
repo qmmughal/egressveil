@@ -66,3 +66,8 @@ It is optional.
 ## Code of Conduct
 
 This project follows the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Releases
+
+Maintainers: see [docs/releasing.md](docs/releasing.md). Releases are built,
+signed and published only by GitHub Actions.

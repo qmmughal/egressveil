@@ -1,0 +1,8 @@
+# Default reviewers for all changes.
+* @qmmughal
+
+# Security-sensitive areas: changes here affect what leaves a user's machine.
+/src/egressveil/proxy/ @qmmughal
+/src/egressveil/inspection.py @qmmughal
+/src/egressveil/detectors/ @qmmughal
+/.github/workflows/ @qmmughal
