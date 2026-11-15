@@ -64,9 +64,10 @@ def test_serve_refuses_invalid_config(write_config: Callable[[str], Path]) -> No
 
 def test_doctor_lists_active_detectors() -> None:
     checks = run_doctor(None)
-    details = [c.detail for c in checks if c.name == "detectors"]
-    assert "active: secrets, tokens" in details
-    assert any("pii" in d and "not implemented" in d for d in details)
+    details = {c.name: c.detail for c in checks}
+    assert details["detectors"] == "active: internal_hostnames, pii, secrets, tokens"
+    assert details["providers"] == "enabled: anthropic"
+    assert details["self-test"].startswith("skipped")
 
 
 def test_serve_process_starts_and_answers_health(tmp_path: Path) -> None:
@@ -97,8 +98,11 @@ def test_serve_process_starts_and_answers_health(tmp_path: Path) -> None:
         assert doc is not None, "gateway did not become healthy"
         assert doc["status"] == "ok"
 
-        port_check = next(c for c in run_doctor(cfg) if c.name == "listen port")
-        assert "gateway is running" in port_check.detail
+        checks = {c.name: c for c in run_doctor(cfg)}
+        assert "gateway is running" in checks["listen port"].detail
+        assert checks["self-test"].detail == "canary credential was blocked locally"
+        audit_text = (tmp_path / "audit.jsonl").read_text(encoding="ascii")
+        assert '"rule_id":"github_token"' in audit_text
     finally:
         proc.terminate()
         out, _ = proc.communicate(timeout=30)

@@ -12,7 +12,7 @@ documentation and threat-model review are complete. There are no dates.
       macOS and Windows, plus dependency auditing
 - [x] Architecture, threat model, security design and integration docs
 
-## Phase 1: Claude Code gateway (current)
+## Phase 1: Claude Code gateway (done, v0.2.0)
 
 - [x] `egressveil serve`: an async aiohttp gateway on loopback with body and
       stream limits
@@ -36,16 +36,24 @@ documentation and threat-model review are complete. There are no dates.
 Known gaps carried forward:
 
 - [ ] Validate against a wider range of real Claude Code sessions and record
-      any endpoints that are blocked as `unsupported_route`
-- [ ] Optional support for an upstream HTTPS proxy, for corporate networks
+      any endpoints that are blocked as `unsupported_route` (moved to Phase 3)
+- [x] Optional support for an upstream HTTPS proxy, for corporate networks
+      (v0.3.0: `gateway.upstream_proxy`)
 
-## Phase 2: Aider and broader detection
+## Phase 2: Aider and broader detection (done, v0.3.0)
 
-- [ ] OpenAI-compatible Chat Completions parser
-- [ ] PII detectors (email, phone, national ID formats) with locale awareness
-- [ ] Internal-hostname detector driven by `internal_domains`
-- [ ] `egressveil run -- <agent> [args]`: launches the agent with base URLs set
-- [ ] Doctor verifies end to end that routing works
+- [x] OpenAI-compatible parser, mounted at `/openai`: Chat Completions,
+      Responses, Completions and Embeddings
+- [x] PII detectors: email, international and North-American phone, US SSN,
+      payment card (Luhn), IBAN (mod-97). Locale coverage is international
+      formats plus the US; more national ID formats are welcome as
+      contributions
+- [x] Internal-hostname detector driven by `internal_domains`, with private
+      suffixes and optional private IPv4 addresses
+- [x] `egressveil run -- <agent> [args]`: launches the agent with base URLs set
+- [x] Doctor verifies end to end that routing works (canary self-test)
+- [x] Verified with real clients: Aider 0.86.2 and the OpenAI and Anthropic
+      Python SDKs, against the live APIs
 
 ## Phase 3: More agents and operational maturity
 

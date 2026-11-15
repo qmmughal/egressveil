@@ -1,6 +1,9 @@
-"""The EgressVeil gateway: an inspecting reverse proxy for the Anthropic API.
+"""The EgressVeil gateway: an inspecting reverse proxy for LLM APIs.
 
-Request flow: host/origin checks -> bounded body read -> inspection (in a worker
+Routing: ``/openai/...`` goes to the OpenAI-compatible upstream (prefix
+removed); everything else goes to the Anthropic upstream.
+
+Request flow: host/origin checks -> bounded body read -> inspection (worker
 thread) -> block locally, or forward to the allowlisted upstream over verified
 TLS -> stream the response back through a bounded buffer -> audit.
 
@@ -16,7 +19,7 @@ import secrets
 import ssl
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final
+from typing import Any, Final
 
 import aiohttp
 from aiohttp import web
@@ -24,14 +27,11 @@ from yarl import URL
 
 from egressveil import __version__
 from egressveil.audit import KEY_FILENAME, AuditLogger, load_or_create_key
-from egressveil.config import EgressVeilConfig
-from egressveil.detectors import IMPLEMENTED_CATEGORIES, build_detectors
+from egressveil.config import EgressVeilConfig, ProviderConfig
 from egressveil.inspection import Inspector, Outcome, Verdict
-from egressveil.policy.engine import PolicyEngine
+from egressveil.providers import adapter_for_path
+from egressveil.providers.base import ProviderAdapter
 from egressveil.redactor import Redactor
-
-if TYPE_CHECKING:
-    from egressveil.config import ProviderConfig
 
 __all__ = ["HEALTH_PATH", "GatewayComponents", "build_components", "create_app"]
 
@@ -68,16 +68,17 @@ _APP_KEY_STATE: Final = web.AppKey("egressveil_state", object)
 @dataclass(slots=True)
 class GatewayComponents:
     config: EgressVeilConfig
-    provider: ProviderConfig
+    providers: dict[str, ProviderConfig]
+    """Enabled providers only."""
     inspector: Inspector
     audit: AuditLogger
 
 
 def build_components(config: EgressVeilConfig) -> GatewayComponents:
     """Wire up key, audit log, detectors, policy and redactor from config."""
-    provider = config.providers["anthropic"]
-    if not provider.enabled:
-        raise ValueError("the anthropic provider is disabled; nothing to serve")
+    providers = {name: p for name, p in config.providers.items() if p.enabled}
+    if not providers:
+        raise ValueError("no provider is enabled; nothing to serve")
     if config.audit.enabled:
         audit_path = config.audit.resolved_path
         key = load_or_create_key(audit_path.parent / KEY_FILENAME)
@@ -85,21 +86,8 @@ def build_components(config: EgressVeilConfig) -> GatewayComponents:
     else:
         key = secrets.token_bytes(32)
         audit = AuditLogger(None, key)
-    enabled = [n for n, d in config.detectors.items() if d.enabled and n in IMPLEMENTED_CATEGORIES]
-    inspector = Inspector(
-        detectors=build_detectors(enabled),
-        engine=PolicyEngine(config.policy),
-        redactor=Redactor(key),
-        audit=audit,
-        mode=config.gateway.mode,
-        allow_opaque_content=config.gateway.allow_opaque_content,
-    )
-    return GatewayComponents(config, provider, inspector, audit)
-
-
-def _error_body(error_type: str, message: str) -> dict[str, Any]:
-    """Anthropic-shaped error so agents surface it to the user."""
-    return {"type": "error", "error": {"type": error_type, "message": message}}
+    inspector = Inspector.from_config(config, redactor=Redactor(key), audit=audit)
+    return GatewayComponents(config, providers, inspector, audit)
 
 
 def _allowed_hosts(config: EgressVeilConfig) -> frozenset[str]:
@@ -113,13 +101,20 @@ def _allowed_hosts(config: EgressVeilConfig) -> frozenset[str]:
 class _Gateway:
     def __init__(self, components: GatewayComponents, *, allow_insecure_upstream: bool) -> None:
         self.c = components
-        upstream = URL(components.provider.upstream_url)
-        if upstream.scheme != "https" and not allow_insecure_upstream:
-            raise ValueError("upstream must use https")
-        self.upstream = upstream
+        self.upstreams: dict[str, URL] = {}
+        for name, provider in components.providers.items():
+            url = URL(provider.upstream_url)
+            if url.scheme != "https" and not allow_insecure_upstream:
+                raise ValueError(f"{name} upstream must use https")
+            self.upstreams[name] = url
+        gw = components.config.gateway
         self.allowed_hosts = _allowed_hosts(components.config)
-        self.max_body = components.config.gateway.max_request_body_bytes
-        self.chunk = components.config.gateway.max_stream_buffer_bytes
+        self.max_body = gw.max_request_body_bytes
+        self.chunk = gw.max_stream_buffer_bytes
+        self.proxy: str | None = (
+            gw.upstream_proxy if gw.upstream_proxy not in {"none", "env"} else None
+        )
+        self.trust_env = gw.upstream_proxy == "env"
         self.session: aiohttp.ClientSession | None = None
 
     async def start(self, _app: web.Application) -> None:
@@ -127,7 +122,8 @@ class _Gateway:
         self.session = aiohttp.ClientSession(
             connector=connector,
             auto_decompress=False,
-            trust_env=False,  # never route via env proxies implicitly
+            # Only honour HTTPS_PROXY/NO_PROXY when explicitly configured.
+            trust_env=self.trust_env,
             timeout=aiohttp.ClientTimeout(
                 total=None, sock_connect=UPSTREAM_CONNECT_TIMEOUT, sock_read=UPSTREAM_READ_TIMEOUT
             ),
@@ -140,11 +136,13 @@ class _Gateway:
 
     # ------------------------------------------------------------------ helpers
 
-    def _audit(self, rid: str, request: web.Request, started: float, **fields: Any) -> None:
+    def _audit(
+        self, rid: str, request: web.Request, provider: str, started: float, **fields: Any
+    ) -> None:
         self.c.audit.write(
             {
                 "request_id": rid,
-                "provider": self.c.provider.name,
+                "provider": provider,
                 "method": request.method,
                 "path": request.path,
                 "duration_ms": round((time.monotonic() - started) * 1000, 1),
@@ -152,11 +150,17 @@ class _Gateway:
             }
         )
 
+    @staticmethod
     def _reply_error(
-        self, rid: str, status: int, error_type: str, message: str, decision: str
+        adapter: ProviderAdapter,
+        rid: str,
+        status: int,
+        error_type: str,
+        message: str,
+        decision: str,
     ) -> web.Response:
         return web.json_response(
-            _error_body(error_type, f"EgressVeil: {message} (request {rid})"),
+            adapter.error_body(error_type, f"EgressVeil: {message} (request {rid})"),
             status=status,
             headers={REQUEST_ID_HEADER: rid, DECISION_HEADER: decision},
         )
@@ -166,25 +170,27 @@ class _Gateway:
     async def handle(self, request: web.Request) -> web.StreamResponse:
         rid = "ev_" + secrets.token_hex(8)
         started = time.monotonic()
+        adapter, upstream_path = adapter_for_path(request.path)
+        name = adapter.name
+
+        def deny(status: int, error_type: str, message: str, reason: str) -> web.Response:
+            self._audit(rid, request, name, started, outcome="block", reason=reason)
+            return self._reply_error(adapter, rid, status, error_type, message, "block")
 
         host = (request.headers.get("Host") or "").lower()
         if host not in self.allowed_hosts:
-            self._audit(rid, request, started, outcome="block", reason="bad_host")
-            return self._reply_error(
-                rid,
+            return deny(
                 403,
                 "permission_error",
                 "request Host header is not the gateway's address",
-                "block",
+                "bad_host",
             )
         if request.headers.get("Origin"):
-            self._audit(rid, request, started, outcome="block", reason="browser_origin")
-            return self._reply_error(
-                rid,
+            return deny(
                 403,
                 "permission_error",
                 "browser-originated requests are not accepted",
-                "block",
+                "browser_origin",
             )
 
         if request.path.startswith(INTERNAL_PREFIX):
@@ -195,39 +201,47 @@ class _Gateway:
                         "service": "egressveil",
                         "version": __version__,
                         "mode": self.c.config.gateway.mode.value,
+                        "providers": sorted(self.upstreams),
                     },
                     headers={REQUEST_ID_HEADER: rid},
                 )
-            return self._reply_error(rid, 404, "not_found_error", "unknown internal path", "block")
+            return self._reply_error(
+                adapter, rid, 404, "not_found_error", "unknown internal path", "block"
+            )
+
+        if name not in self.upstreams:
+            return deny(
+                404,
+                "not_found_error",
+                f"the {name} provider is not enabled in the EgressVeil configuration",
+                "provider_disabled",
+            )
 
         declared = request.content_length
         if declared is not None and declared > self.max_body:
-            self._audit(rid, request, started, outcome="block", reason="body_too_large")
-            return self._reply_error(
-                rid,
+            return deny(
                 413,
                 "request_too_large",
                 f"request body exceeds {self.max_body} bytes",
-                "block",
+                "body_too_large",
             )
         try:
             body = await request.read()
         except web.HTTPRequestEntityTooLarge:
-            self._audit(rid, request, started, outcome="block", reason="body_too_large")
-            return self._reply_error(
-                rid,
+            return deny(
                 413,
                 "request_too_large",
                 f"request body exceeds {self.max_body} bytes",
-                "block",
+                "body_too_large",
             )
 
         loop = asyncio.get_running_loop()
         verdict: Verdict = await loop.run_in_executor(
             None,
             lambda: self.c.inspector.inspect_request(
+                adapter=adapter,
                 method=request.method,
-                path=request.path,
+                path=upstream_path,
                 query=request.query_string,
                 content_type=request.headers.get("Content-Type"),
                 content_encoding=request.headers.get("Content-Encoding"),
@@ -248,7 +262,7 @@ class _Gateway:
             ]
 
         if verdict.outcome is Outcome.BLOCK:
-            self._audit(rid, request, started, outcome="block", **audit_fields)
+            self._audit(rid, request, name, started, outcome="block", **audit_fields)
             hint = (
                 " Remove the value from the conversation (for example start a new session) "
                 "or adjust the EgressVeil policy."
@@ -256,6 +270,7 @@ class _Gateway:
                 else ""
             )
             return self._reply_error(
+                adapter,
                 rid,
                 400,
                 "invalid_request_error",
@@ -264,20 +279,28 @@ class _Gateway:
             )
 
         decision = "redact" if verdict.outcome is Outcome.REDACT else "forward"
-        return await self._forward(request, rid, started, verdict.body, decision, audit_fields)
+        raw_path = request.raw_path[len(adapter.mount) :] if adapter.mount else request.raw_path
+        if not raw_path.startswith("/"):
+            raw_path = "/" + raw_path
+        target = URL(str(self.upstreams[name]).rstrip("/") + raw_path, encoded=True)
+        return await self._forward(
+            request, adapter, rid, started, target, verdict.body, decision, audit_fields
+        )
 
     async def _forward(
         self,
         request: web.Request,
+        adapter: ProviderAdapter,
         rid: str,
         started: float,
+        target: URL,
         body: bytes,
         decision: str,
         audit_fields: dict[str, Any],
     ) -> web.StreamResponse:
         assert self.session is not None  # noqa: S101 - set in on_startup
+        name = adapter.name
         headers = [(k, v) for k, v in request.headers.items() if k.lower() not in _DROP_REQUEST]
-        target = URL(str(self.upstream).rstrip("/") + request.raw_path, encoded=True)
         try:
             upstream = await self.session.request(
                 request.method,
@@ -285,22 +308,32 @@ class _Gateway:
                 headers=headers,
                 data=body if body else None,
                 allow_redirects=False,
+                proxy=self.proxy,
             )
         except (TimeoutError, aiohttp.ServerTimeoutError):
             self._audit(
-                rid, request, started, outcome="error", reason="upstream_timeout", **audit_fields
+                rid,
+                request,
+                name,
+                started,
+                outcome="error",
+                reason="upstream_timeout",
+                **audit_fields,
             )
-            return self._reply_error(rid, 504, "api_error", "upstream timed out", "error")
+            return self._reply_error(adapter, rid, 504, "api_error", "upstream timed out", "error")
         except aiohttp.ClientError:
             self._audit(
                 rid,
                 request,
+                name,
                 started,
                 outcome="error",
                 reason="upstream_unreachable",
                 **audit_fields,
             )
-            return self._reply_error(rid, 502, "api_error", "upstream unreachable", "error")
+            return self._reply_error(
+                adapter, rid, 502, "api_error", "upstream unreachable", "error"
+            )
 
         async with upstream:
             response = web.StreamResponse(status=upstream.status, reason=upstream.reason)
@@ -328,6 +361,7 @@ class _Gateway:
             self._audit(
                 rid,
                 request,
+                name,
                 started,
                 outcome=decision,
                 upstream_status=upstream.status,

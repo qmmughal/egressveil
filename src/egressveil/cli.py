@@ -3,29 +3,18 @@
 from __future__ import annotations
 
 import os
-import platform
-import shutil
-import socket
+import secrets
 import sys
-from collections.abc import Callable
-from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Final
-from urllib.parse import urlsplit
+from typing import Annotated
 
 import typer
 
 from egressveil import __version__
-from egressveil.config import (
-    CONFIG_ENV_VAR,
-    EgressVeilConfig,
-    LoadResult,
-    is_loopback_host,
-    load_config,
-)
+from egressveil.config import CONFIG_ENV_VAR, EgressVeilConfig, LoadResult, load_config
+from egressveil.doctor import OPENAI_MOUNT_PATH, Check, Status, gateway_base_url, run_doctor
 
-MIN_PYTHON: Final = (3, 11)
+__all__ = ["Check", "Status", "app", "main", "run_doctor"]
 
 app = typer.Typer(
     name="egressveil",
@@ -54,6 +43,17 @@ def _print_source(result: LoadResult) -> None:
     src = result.source
     where = str(src.path) if src.path else "built-in defaults"
     typer.echo(f"Config source: {where} ({src.origin})")
+
+
+def _load_or_exit(config: Path | None) -> LoadResult:
+    result = load_config(config)
+    if result.config is None:
+        _print_source(result)
+        for issue in result.errors:
+            typer.echo(f"  {issue}", err=True)
+        typer.echo("Configuration is INVALID; run 'egressveil config validate'.", err=True)
+        raise typer.Exit(code=1)
+    return result
 
 
 # --------------------------------------------------------------------------- version
@@ -89,195 +89,9 @@ def config_validate(config: ConfigOption = None) -> None:
 # --------------------------------------------------------------------------- doctor
 
 
-class Status(StrEnum):
-    OK = "OK"
-    INFO = "INFO"
-    WARN = "WARN"
-    FAIL = "FAIL"
-
-
-@dataclass(frozen=True, slots=True)
-class Check:
-    status: Status
-    name: str
-    detail: str
-
-
-def _check_python() -> Check:
-    current = sys.version_info[:3]
-    text = ".".join(map(str, current))
-    if current[:2] >= MIN_PYTHON:
-        return Check(Status.OK, "python", f"{text} ({platform.python_implementation()})")
-    need = ".".join(map(str, MIN_PYTHON))
-    return Check(Status.FAIL, "python", f"{text} found; {need}+ is required")
-
-
-def _check_platform() -> Check:
-    return Check(Status.INFO, "platform", f"{platform.system()} {platform.release()} ({os.name})")
-
-
-def _check_config(result: LoadResult) -> Check:
-    src = str(result.source.path) if result.source.path else "built-in defaults"
-    if result.config is None:
-        return Check(
-            Status.FAIL,
-            "config",
-            f"{src}: {len(result.errors)} error(s); run 'egressveil config validate'",
-        )
-    if result.warnings:
-        return Check(Status.WARN, "config", f"{src}: valid with {len(result.warnings)} warning(s)")
-    return Check(Status.OK, "config", f"{src}: valid")
-
-
-def _check_port(cfg: EgressVeilConfig) -> Check:
-    host, port = cfg.gateway.listen_host, cfg.gateway.listen_port
-    family = socket.AF_INET6 if ":" in host else socket.AF_INET
-    try:
-        with socket.socket(family, socket.SOCK_STREAM) as sock:
-            sock.bind((host, port))
-    except OSError:
-        if _gateway_health(cfg) is not None:
-            return Check(
-                Status.OK, "listen port", f"EgressVeil gateway is running on {host}:{port}"
-            )
-        return Check(Status.WARN, "listen port", f"{host}:{port} is in use or not bindable")
-    return Check(Status.OK, "listen port", f"{host}:{port} is available (gateway not running)")
-
-
-def _gateway_health(cfg: EgressVeilConfig) -> dict[str, object] | None:
-    """Return the running gateway's health document, or ``None``."""
-    import json
-    import urllib.request
-
-    from egressveil.proxy.server import HEALTH_PATH
-
-    host = cfg.gateway.listen_host
-    netloc = f"[{host}]" if ":" in host else host
-    url = f"http://{netloc}:{cfg.gateway.listen_port}{HEALTH_PATH}"
-    # Explicitly bypass any HTTP(S)_PROXY settings: this is a loopback probe.
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    try:
-        with opener.open(url, timeout=1.5) as resp:
-            doc = json.loads(resp.read(4096))
-    except (OSError, ValueError):
-        return None
-    if isinstance(doc, dict) and doc.get("service") == "egressveil":
-        return doc
-    return None
-
-
-def _check_audit(cfg: EgressVeilConfig) -> Check:
-    if not cfg.audit.enabled:
-        return Check(Status.INFO, "audit log", "disabled")
-    target = cfg.audit.resolved_path
-    probe = target.parent
-    while not probe.exists() and probe != probe.parent:
-        probe = probe.parent
-    if os.access(probe, os.W_OK):
-        return Check(Status.OK, "audit log", f"{target} (writable location)")
-    return Check(Status.WARN, "audit log", f"{target}: directory is not writable")
-
-
-def _check_proxy_env() -> Check:
-    names = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY")
-    found = sorted({n for n in names for k in (n, n.lower()) if os.environ.get(k)})
-    if not found:
-        return Check(Status.INFO, "proxy env", "no HTTP(S)_PROXY/ALL_PROXY variables set")
-    # Values are hidden: proxy URLs frequently embed credentials.
-    return Check(Status.INFO, "proxy env", f"set: {', '.join(found)} (values hidden)")
-
-
-def _base_url_state(var: str, cfg: EgressVeilConfig) -> str:
-    value = os.environ.get(var)
-    if not value:
-        return f"{var} not set"
-    parts = urlsplit(value)
-    host = parts.hostname or ""
-    if is_loopback_host(host):
-        try:
-            port = parts.port
-        except ValueError:
-            port = None
-        if port == cfg.gateway.listen_port:
-            return f"{var} points at the EgressVeil listen address"
-        return f"{var} points at a local address on a different port"
-    return f"{var} points at a non-local endpoint (value hidden)"
-
-
-def _check_tool(name: str, label: str, extra: str) -> Check:
-    path = shutil.which(name)
-    if path:
-        return Check(Status.OK, label, f"'{name}' found on PATH; {extra}")
-    return Check(Status.INFO, label, f"'{name}' not found on PATH; {extra}")
-
-
-def _integration_checks(cfg: EgressVeilConfig) -> list[Check]:
-    return [
-        _check_tool("claude", "claude code", _base_url_state("ANTHROPIC_BASE_URL", cfg)),
-        _check_tool(
-            "aider",
-            "aider",
-            "; ".join(
-                _base_url_state(v, cfg)
-                for v in ("ANTHROPIC_BASE_URL", "OPENAI_API_BASE", "OPENAI_BASE_URL")
-            ),
-        ),
-        _check_tool(
-            "cursor", "cursor", "experimental: most traffic is not routable to a local gateway"
-        ),
-        Check(Status.INFO, "openclaw", "integration planned; not yet supported"),
-    ]
-
-
-def run_doctor(config_path: Path | None) -> list[Check]:
-    checks: list[Check] = [_check_python(), _check_platform()]
-    result = load_config(config_path)
-    checks.append(_check_config(result))
-    cfg = result.config
-    if cfg is not None:
-        steps: list[Callable[[EgressVeilConfig], Check]] = [_check_port, _check_audit]
-        checks.extend(step(cfg) for step in steps)
-        checks.append(_check_proxy_env())
-        checks.extend(_integration_checks(cfg))
-        checks.extend(_detector_checks(cfg))
-    return checks
-
-
-def _detector_checks(cfg: EgressVeilConfig) -> list[Check]:
-    from egressveil.detectors import IMPLEMENTED_CATEGORIES
-
-    checks: list[Check] = []
-    active = sorted(
-        n for n, d in cfg.detectors.items() if d.enabled and n in IMPLEMENTED_CATEGORIES
-    )
-    checks.append(
-        Check(
-            Status.OK if active else Status.WARN,
-            "detectors",
-            f"active: {', '.join(active) or 'none'}",
-        )
-    )
-    pending = sorted(
-        n for n, d in cfg.detectors.items() if d.enabled and n not in IMPLEMENTED_CATEGORIES
-    )
-    if pending:
-        checks.append(
-            Check(
-                Status.INFO, "detectors", f"enabled but not implemented yet: {', '.join(pending)}"
-            )
-        )
-    if cfg.providers["openai"].enabled:
-        checks.append(
-            Check(
-                Status.WARN, "providers", "openai is enabled but not supported by the gateway yet"
-            )
-        )
-    return checks
-
-
 @app.command()
 def doctor(config: ConfigOption = None) -> None:
-    """Check Python, configuration, local environment and integration prerequisites."""
+    """Check Python, configuration, gateway, routing and integration prerequisites."""
     typer.echo(f"egressveil {__version__} doctor")
     checks = run_doctor(config)
     width = max(len(c.name) for c in checks)
@@ -293,34 +107,28 @@ def doctor(config: ConfigOption = None) -> None:
 # --------------------------------------------------------------------------- serve
 
 
-def _load_or_exit(config: Path | None) -> EgressVeilConfig:
-    result = load_config(config)
-    if result.config is None:
-        _print_source(result)
-        for issue in result.errors:
-            typer.echo(f"  {issue}", err=True)
-        typer.echo("Configuration is INVALID; run 'egressveil config validate'.", err=True)
-        raise typer.Exit(code=1)
-    return result.config
-
-
-def _base_url_instructions(url: str) -> list[str]:
+def _routing_instructions(cfg: EgressVeilConfig) -> list[str]:
+    base = gateway_base_url(cfg)
+    pairs: list[tuple[str, str]] = []
+    if cfg.providers["anthropic"].enabled:
+        pairs.append(("ANTHROPIC_BASE_URL", base))
+    if cfg.providers["openai"].enabled:
+        pairs.append(("OPENAI_BASE_URL", base + OPENAI_MOUNT_PATH))
     if os.name == "nt":
-        return [
-            f'  PowerShell:  $env:ANTHROPIC_BASE_URL = "{url}"',
-            f"  cmd.exe:     set ANTHROPIC_BASE_URL={url}",
-        ]
-    return [f"  export ANTHROPIC_BASE_URL={url}"]
+        return [f'  PowerShell:  $env:{k} = "{v}"' for k, v in pairs]
+    return [f"  export {k}={v}" for k, v in pairs]
 
 
 @app.command()
 def serve(config: ConfigOption = None) -> None:
-    """Run the local gateway for the Anthropic API (Claude Code)."""
+    """Run the local gateway (Anthropic API at /, OpenAI-compatible API at /openai)."""
     from aiohttp import web
 
     from egressveil.proxy import build_components, create_app
 
-    cfg = _load_or_exit(config)
+    result = _load_or_exit(config)
+    cfg = result.config
+    assert cfg is not None  # noqa: S101 - guaranteed by _load_or_exit
     try:
         components = build_components(cfg)
     except (OSError, ValueError) as exc:
@@ -328,31 +136,20 @@ def serve(config: ConfigOption = None) -> None:
         raise typer.Exit(code=1) from None
 
     g = cfg.gateway
-    netloc = f"[{g.listen_host}]" if ":" in g.listen_host else g.listen_host
-    base_url = f"http://{netloc}:{g.listen_port}"
-    lines = [
-        f"EgressVeil {__version__} gateway",
-        f"  listening   {base_url}",
-        f"  upstream    {components.provider.upstream_origin}",
+    base_url = gateway_base_url(cfg)
+    lines = [f"EgressVeil {__version__} gateway", f"  listening   {base_url}"]
+    for name, provider in sorted(components.providers.items()):
+        mount = "/openai" if name == "openai" else "/"
+        lines.append(f"  {name:<11} {mount:<8} -> {provider.upstream_origin}")
+    lines += [
         f"  mode        {g.mode.value}",
+        f"  detectors   {', '.join(sorted(n for n, d in cfg.detectors.items() if d.enabled))}",
         f"  audit log   {components.audit.path or 'disabled'}",
     ]
-    for issue in load_config(config).warnings:
-        lines.append(f"  {issue}")
-    pending = sorted(
-        n for n, d in cfg.detectors.items() if d.enabled and n not in _implemented_categories()
-    )
-    if pending:
-        lines.append(f"  note: not implemented yet, no effect: {', '.join(pending)}")
-    if cfg.providers["openai"].enabled:
-        lines.append("  note: openai provider is not supported by the gateway yet; ignored")
-    lines += [
-        "",
-        "Point Claude Code at the gateway:",
-        *_base_url_instructions(base_url),
-        "",
-        "Press Ctrl+C to stop.",
-    ]
+    lines += [f"  {issue}" for issue in result.warnings]
+    lines += ["", "Point your agent at the gateway (or use 'egressveil run -- <agent>'):"]
+    lines += _routing_instructions(cfg)
+    lines += ["", "Press Ctrl+C to stop."]
     typer.echo("\n".join(lines))
 
     try:
@@ -369,10 +166,34 @@ def serve(config: ConfigOption = None) -> None:
         raise typer.Exit(code=1) from None
 
 
-def _implemented_categories() -> frozenset[str]:
-    from egressveil.detectors import IMPLEMENTED_CATEGORIES
+# --------------------------------------------------------------------------- run
 
-    return IMPLEMENTED_CATEGORIES
+
+@app.command(
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+    help="Run an AI coding agent with its API traffic routed through EgressVeil.\n\n"
+    "Example: egressveil run -- claude",
+)
+def run(
+    ctx: typer.Context,
+    config: ConfigOption = None,
+    start: Annotated[
+        bool,
+        typer.Option("--start/--no-start", help="Start the gateway if it is not running."),
+    ] = True,
+) -> None:
+    from egressveil.launcher import LaunchError, run_agent
+
+    result = _load_or_exit(config)
+    assert result.config is not None  # noqa: S101
+    try:
+        code = run_agent(
+            list(ctx.args), result.config, config or result.source.path, start_gateway=start
+        )
+    except LaunchError as exc:
+        typer.echo(f"egressveil: {exc}", err=True)
+        raise typer.Exit(code=2) from None
+    raise typer.Exit(code=code)
 
 
 # --------------------------------------------------------------------------- scan
@@ -396,26 +217,15 @@ def scan(
 
     Exit status: 0 = nothing found, 1 = findings, 2 = a file could not be read.
     """
-    import secrets as _secrets
-
     from egressveil.audit import AuditLogger
-    from egressveil.detectors import IMPLEMENTED_CATEGORIES, build_detectors
     from egressveil.inspection import Inspector
     from egressveil.policy import PolicyAction
-    from egressveil.policy.engine import PolicyEngine
     from egressveil.redactor import Redactor
 
-    cfg = _load_or_exit(config)
-    key = _secrets.token_bytes(32)
-    enabled = [n for n, d in cfg.detectors.items() if d.enabled and n in IMPLEMENTED_CATEGORIES]
-    inspector = Inspector(
-        detectors=build_detectors(enabled),
-        engine=PolicyEngine(cfg.policy),
-        redactor=Redactor(key),
-        audit=AuditLogger(None, key),
-        mode=cfg.gateway.mode,
-        allow_opaque_content=cfg.gateway.allow_opaque_content,
-    )
+    cfg = _load_or_exit(config).config
+    assert cfg is not None  # noqa: S101
+    key = secrets.token_bytes(32)
+    inspector = Inspector.from_config(cfg, redactor=Redactor(key), audit=AuditLogger(None, key))
     limit = cfg.gateway.max_request_body_bytes
     total = 0
     unreadable = 0

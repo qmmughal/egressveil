@@ -54,15 +54,28 @@ claude
   whether `claude` is on `PATH`, and whether `ANTHROPIC_BASE_URL` points at
   the gateway. It never prints the variable's value.
 
-## Aider (initial priority, Phase 2)
+## Aider (available, pre-alpha)
 
-- **Routing:** Aider talks to providers through LiteLLM. The plan is to
-  point the provider base URL at the gateway, using `ANTHROPIC_BASE_URL` for
-  Anthropic models and `--openai-api-base` or the `OPENAI_API_BASE` /
-  `OPENAI_BASE_URL` variables for OpenAI-compatible models.
-- **Requires:** the OpenAI-compatible parser planned for Phase 2. Routing
-  Anthropic models through `ANTHROPIC_BASE_URL` should work with the Phase 1
-  gateway, but it has not been tested with Aider yet.
+```bash
+egressveil run -- aider --model anthropic/claude-sonnet-5-5
+egressveil run -- aider --model openai/gpt-5      # needs providers.openai.enabled: true
+```
+
+- **Routing:** Aider talks to providers through LiteLLM. `egressveil run`
+  sets `ANTHROPIC_BASE_URL` to the gateway and, when the OpenAI provider is
+  enabled, sets `OPENAI_API_BASE` / `OPENAI_BASE_URL` to
+  `http://127.0.0.1:8787/openai/v1`. To configure it by hand, pass
+  `--openai-api-base http://127.0.0.1:8787/openai/v1` instead.
+- **Inspected:** chat messages, including file contents that Aider adds to
+  the chat, repository-map text, and tool calls and results.
+- **Verified:** Aider 0.86.2 was run through `egressveil run` against the
+  live OpenAI and Anthropic APIs with dummy keys. Both requests were routed,
+  inspected and forwarded, and both providers' real errors came back. The
+  official OpenAI and Anthropic Python SDKs were checked the same way,
+  including a local block in each provider's error format.
+- **Other OpenAI-compatible endpoints:** the gateway's OpenAI upstream is
+  `api.openai.com` by default. For another OpenAI-compatible service, set
+  `providers.openai.upstream_url` and `allow_custom_upstream: true`.
 - **Not inspected:** Aider's git operations, `/web` scraping, shell
   commands, and other providers that aren't routed through the gateway.
 
@@ -89,6 +102,9 @@ release says otherwise.
 
 ## Verifying routing
 
-After Phase 1 you will be able to confirm that traffic is routed by watching
-the audit log while the agent runs. Until then, `egressveil doctor` reports
-only static prerequisites.
+- `egressveil doctor` runs an end-to-end **self-test** against the running
+  gateway. It sends a random canary credential that must be blocked locally,
+  so the test never reaches the provider.
+- Each request the agent makes appears as one line in the audit log. If an
+  agent's requests don't appear there, they aren't going through
+  EgressVeil.

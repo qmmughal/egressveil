@@ -421,7 +421,9 @@ def test_insecure_upstream_refused_by_default(tmp_path: Path) -> None:
         create_app(build_components(cfg))
 
 
-def test_disabled_anthropic_provider_cannot_serve(tmp_path: Path) -> None:
-    cfg = make_config({"providers": {"anthropic": {"enabled": False}}})
-    with pytest.raises(ValueError, match="disabled"):
+def test_no_enabled_provider_cannot_serve(tmp_path: Path) -> None:
+    cfg = make_config(
+        {"providers": {"anthropic": {"enabled": False}, "openai": {"enabled": False}}}
+    )
+    with pytest.raises(ValueError, match="no provider is enabled"):
         build_components(cfg)

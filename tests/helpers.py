@@ -7,9 +7,9 @@ from typing import Any
 
 from egressveil.audit import AuditLogger
 from egressveil.config import EgressVeilConfig, parse_config
-from egressveil.detectors import IMPLEMENTED_CATEGORIES, build_detectors
 from egressveil.inspection import Inspector, Verdict
-from egressveil.policy.engine import PolicyEngine
+from egressveil.providers import anthropic
+from egressveil.providers.base import ProviderAdapter
 from egressveil.redactor import Redactor
 
 KEY = secrets.token_bytes(32)
@@ -22,15 +22,8 @@ def make_config(raw: dict[str, Any] | None = None) -> EgressVeilConfig:
 
 
 def make_inspector(raw: dict[str, Any] | None = None, *, key: bytes = KEY) -> Inspector:
-    cfg = make_config(raw)
-    enabled = [n for n, d in cfg.detectors.items() if d.enabled and n in IMPLEMENTED_CATEGORIES]
-    return Inspector(
-        detectors=build_detectors(enabled),
-        engine=PolicyEngine(cfg.policy),
-        redactor=Redactor(key),
-        audit=AuditLogger(None, key),
-        mode=cfg.gateway.mode,
-        allow_opaque_content=cfg.gateway.allow_opaque_content,
+    return Inspector.from_config(
+        make_config(raw), redactor=Redactor(key), audit=AuditLogger(None, key)
     )
 
 
@@ -56,9 +49,11 @@ def inspect(
     query: str = "",
     content_type: str | None = "application/json",
     content_encoding: str | None = None,
+    adapter: ProviderAdapter = anthropic.ADAPTER,
 ) -> Verdict:
     raw = body if isinstance(body, bytes) else json.dumps(body).encode()
     return inspector.inspect_request(
+        adapter=adapter,
         method=method,
         path=path,
         query=query,
@@ -68,7 +63,7 @@ def inspect(
     )
 
 
-def with_upstream(cfg: EgressVeilConfig, url: str) -> EgressVeilConfig:
+def with_upstream(cfg: EgressVeilConfig, url: str, provider: str = "anthropic") -> EgressVeilConfig:
     providers = dict(cfg.providers)
-    providers["anthropic"] = replace(providers["anthropic"], upstream_url=url)
+    providers[provider] = replace(providers[provider], upstream_url=url)
     return replace(cfg, providers=providers)

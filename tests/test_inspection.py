@@ -9,7 +9,8 @@ from egressveil.detectors import Finding
 from egressveil.inspection import URL_LOCATION, Inspector, Outcome
 from egressveil.policy import GatewayMode, PolicyAction
 from egressveil.policy.engine import PolicyEngine, most_restrictive
-from egressveil.providers.anthropic import RouteKind, classify_route
+from egressveil.providers.anthropic import ADAPTER as ANTHROPIC
+from egressveil.providers.base import RouteKind
 from egressveil.redactor import PLACEHOLDER_PREFIX, Redactor
 from tests import fakes
 from tests.helpers import KEY, inspect, make_config, make_inspector, messages_body, policy
@@ -31,7 +32,7 @@ from tests.helpers import KEY, inspect, make_config, make_inspector, messages_bo
     ],
 )
 def test_classify_route(method: str, path: str, has_body: bool, kind: RouteKind) -> None:
-    assert classify_route(method, path, has_body) is kind
+    assert ANTHROPIC.classify(method, path, has_body) is kind
 
 
 # ----------------------------------------------------------------- policy
@@ -225,13 +226,20 @@ def test_signature_values_are_not_scanned() -> None:
     assert inspect(make_inspector(), body).outcome is Outcome.FORWARD
 
 
-def test_finding_in_signed_thinking_escalates_redact_to_block() -> None:
-    body = messages_body(
-        [{"type": "thinking", "thinking": f"found {fakes.github_token()}", "signature": "sig"}]
-    )
-    verdict = inspect(_redact_inspector(), body)
-    assert verdict.outcome is Outcome.BLOCK
-    assert verdict.findings[0].escalated
+@pytest.mark.parametrize("policy_action", ["REDACT", "BLOCK"])
+def test_signed_thinking_is_recorded_not_modified_or_blocked(policy_action: str) -> None:
+    raw = json.dumps(
+        messages_body(
+            [{"type": "thinking", "thinking": f"found {fakes.github_token()}", "signature": "s"}]
+        )
+    ).encode()
+    verdict = inspect(make_inspector(policy(secrets=policy_action)), raw)
+    assert verdict.outcome is Outcome.FORWARD
+    assert verdict.body is raw  # signature stays valid
+    (finding,) = verdict.findings
+    assert finding.signed
+    assert finding.action is PolicyAction.LOG_ONLY
+    assert finding.as_audit()["signed"] is True
 
 
 def test_redacted_thinking_is_skipped() -> None:

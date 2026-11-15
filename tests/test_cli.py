@@ -107,7 +107,7 @@ def test_doctor_detects_local_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8787")
     checks = run_doctor(None)
     claude = next(c for c in checks if c.name == "claude code")
-    assert "points at the EgressVeil listen address" in claude.detail
+    assert "points at the EgressVeil gateway" in claude.detail
 
 
 def test_doctor_reports_core_checks() -> None:

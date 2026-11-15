@@ -12,9 +12,7 @@
 # untouched. `config validate` rejects files that appear to contain secrets.
 #
 # Run the gateway with:  egressveil serve --config path/to/egressveil.yaml
-#
-# NOTE: the pii and internal_hostnames detectors are accepted here but are not
-# implemented yet (Phase 2); enabling them currently has no effect.
+# Or run an agent through it:  egressveil run -- claude
 
 version: 1
 
@@ -32,6 +30,10 @@ gateway:
   # Images and PDFs (base64) cannot be inspected. In strict mode they are
   # blocked unless this is true. Text in the same request is still inspected.
   allow_opaque_content: false
+  # How to reach the upstream API: none (direct, default), env (honour
+  # HTTPS_PROXY / NO_PROXY), or an explicit http(s)://host:port proxy.
+  # Proxy credentials belong in the environment (use env), never here.
+  upstream_proxy: none
 
 # Upstream endpoints. Hosts must be on the built-in provider allowlist
 # unless allow_custom_upstream is set for that provider. https:// only.
@@ -39,6 +41,8 @@ providers:
   anthropic:
     enabled: true
     upstream_url: https://api.anthropic.com
+  # OpenAI-compatible APIs are served under /openai:
+  #   OPENAI_BASE_URL=http://127.0.0.1:8787/openai/v1
   openai:
     enabled: false
     upstream_url: https://api.openai.com
@@ -69,6 +73,11 @@ detectors:
     internal_domains:
       - corp.example.com
       - internal.example
+    # Also flag hosts under .internal .corp .intranet .lan .home.arpa
+    include_common_internal_suffixes: true
+    # Flag RFC 1918 addresses (10/8, 172.16/12, 192.168/16). Off by default:
+    # example code is full of them.
+    include_private_ips: false
 
 audit:
   enabled: true

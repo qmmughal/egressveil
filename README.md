@@ -16,12 +16,12 @@ license keys or usage limits. It runs entirely on your machine, has no
 telemetry, and its only network connection is to the LLM provider you
 configure.
 
-> **Project status: pre-alpha (Phase 1).** EgressVeil now runs as a local
-> gateway for the **Anthropic Messages API**, the API Claude Code uses. It
-> detects **secrets and tokens** and blocks or redacts them according to your
-> policy. PII and internal-hostname detection, and support for other agents,
-> are not implemented yet. Detection is heuristic. Treat EgressVeil as one
-> layer of defense, not a guarantee.
+> **Project status: pre-alpha.** EgressVeil runs as a local gateway for the
+> **Anthropic Messages API** (Claude Code, Aider) and **OpenAI-compatible
+> APIs** (Aider, OpenAI SDK-based agents). It detects **secrets, tokens,
+> personal data and internal hostnames** and blocks or redacts them according
+> to your policy. Detection is heuristic. Treat EgressVeil as one layer of
+> defense, not a guarantee.
 
 ---
 
@@ -51,13 +51,20 @@ secret.
 
 See [docs/threat-model.md](docs/threat-model.md) for the full scope.
 
-## Quick start with Claude Code
+## Quick start
+
+The easiest way to use EgressVeil is to launch your agent through it:
 
 ```bash
-egressveil serve
+egressveil run -- claude          # Claude Code
+egressveil run -- aider           # Aider (Anthropic or OpenAI models)
 ```
 
-In another terminal, point Claude Code at the gateway and start it as usual:
+`egressveil run` starts the gateway if it isn't already running, points the
+agent's `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` at it, and stops the
+gateway again when the agent exits. If you prefer to run the gateway
+yourself, start it with `egressveil serve` and set the variables in another
+terminal:
 
 ```bash
 # Linux/macOS
@@ -97,25 +104,26 @@ or adjust the EgressVeil policy. (request ev_3c1f0a9e2b7d4c11)
 
 | Feature | Notes |
 | --- | --- |
-| `egressveil serve` | A local gateway for the Anthropic Messages API (`/v1/messages`, `/v1/messages/count_tokens`), with streaming (SSE) passthrough |
+| `egressveil serve` | A local gateway for the Anthropic Messages API (`/v1/messages`, `/v1/messages/count_tokens`) and, under `/openai`, OpenAI-compatible APIs (`/v1/chat/completions`, `/v1/responses`, `/v1/completions`, `/v1/embeddings`). Streaming (SSE) is passed through |
+| `egressveil run -- <agent>` | Launches an agent with its base URLs pointing at the gateway, starting and stopping the gateway as needed |
 | Secret detectors | Anthropic, OpenAI, AWS, GitHub, GitLab, Slack, Stripe, Google, npm and Hugging Face keys; private keys; credentials in URLs; generic `password = "..."` and `.env` assignments |
 | Token detectors | JWTs, bearer tokens and Basic auth headers |
+| PII detectors | Email addresses, international and North-American phone numbers, US SSNs, payment cards (Luhn-checked) and IBANs (mod-97-checked). Example, test and no-reply addresses are ignored |
+| Internal-hostname detector | Hosts under your `internal_domains`, plus `.internal`, `.corp`, `.intranet`, `.lan` and `.home.arpa`. Optionally private IPv4 addresses |
+| Upstream proxy | `gateway.upstream_proxy: env` or an explicit proxy URL, for corporate networks |
 | Policy engine | `ALLOW` / `REDACT` / `BLOCK` / `LOG_ONLY` for each detector. The most restrictive action wins |
 | Redaction | Placeholders keyed by an HMAC of the value, so the same value always gets the same placeholder. That keeps conversations consistent and prompt caching effective. Redacted values are never restored |
 | Fail-closed strict mode | Blocks unsupported endpoints, non-JSON or compressed bodies, malformed or duplicate-key JSON, too-deep nesting, uninspectable images and PDFs, and requests where a detector fails |
 | Audit log | JSONL with request metadata, rule IDs, JSON locations and keyed digests. Never bodies, headers, query strings or raw values |
 | Local hardening | Loopback-only listener. Host-header check against DNS rebinding. Browser `Origin` requests rejected. Upstreams are https-only and allowlisted, TLS is verified, and redirects are not followed |
 | `egressveil scan` | Run the detectors and policy over files or stdin. Prints locations and rule IDs, never values |
-| `egressveil doctor` | Checks Python, config, the listen port and whether the gateway is running, the audit location, the base-URL environment variables, and the active detectors |
+| `egressveil doctor` | Checks Python, config, whether the gateway is running, an end-to-end self-test (a random canary credential must be blocked locally), the audit location, proxy settings, the base-URL environment variables, and the active detectors |
 | `egressveil config validate` | A strict schema with secure defaults. Output never contains values |
 
 ### Planned
 
 | Feature | Phase |
 | --- | --- |
-| OpenAI-compatible API parser (for Aider) | 2 |
-| PII and internal-hostname detectors | 2 |
-| `egressveil run -- <agent>` launcher that sets base URLs | 2 |
 | OpenClaw integration | 3 |
 | Cursor: documented, experimental support where technically possible | 3 |
 | Response-side inspection | 3 |
@@ -173,7 +181,7 @@ and carry PyPI attestations. The files on the
 signed build provenance, which you can verify with:
 
 ```bash
-gh attestation verify egressveil-0.2.0-py3-none-any.whl --repo qmmughal/egressveil
+gh attestation verify egressveil-0.3.0-py3-none-any.whl --repo qmmughal/egressveil
 ```
 
 To work on EgressVeil itself, install it from source:
@@ -193,18 +201,23 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
 
 ```console
 $ egressveil serve
-EgressVeil 0.2.0 gateway
+EgressVeil 0.3.0 gateway
   listening   http://127.0.0.1:8787
-  upstream    https://api.anthropic.com
+  anthropic   /        -> https://api.anthropic.com
+  openai      /openai  -> https://api.openai.com
   mode        strict
+  detectors   internal_hostnames, pii, secrets, tokens
   audit log   /home/you/.egressveil/audit.jsonl
-  note: not implemented yet, no effect: internal_hostnames, pii
 
-Point Claude Code at the gateway:
+Point your agent at the gateway (or use 'egressveil run -- <agent>'):
   export ANTHROPIC_BASE_URL=http://127.0.0.1:8787
+  export OPENAI_BASE_URL=http://127.0.0.1:8787/openai/v1
 
 Press Ctrl+C to stop.
 ```
+
+The `openai` line appears only when `providers.openai.enabled: true` is set.
+By default only Anthropic is enabled.
 
 Scan files before you share them with an agent:
 
@@ -243,7 +256,7 @@ All options are documented in
 | Agent | Status | Routing mechanism | Coverage |
 | --- | --- | --- | --- |
 | **Claude Code** | **Available (pre-alpha)** | `ANTHROPIC_BASE_URL=http://127.0.0.1:8787` | Anthropic Messages API calls only. Not tool, shell, web or MCP traffic |
-| **Aider** | Partial: Anthropic models only | `ANTHROPIC_BASE_URL`. OpenAI-compatible models need Phase 2 | LLM API calls only |
+| **Aider** | **Available (pre-alpha)** | `egressveil run -- aider`, or `ANTHROPIC_BASE_URL` / `OPENAI_API_BASE=http://127.0.0.1:8787/openai/v1` | Anthropic and OpenAI-compatible API calls. Not git, `/web` or shell traffic |
 | **OpenClaw** | Future | To be determined | Not supported yet |
 | **Cursor** | Limited and experimental | Most model traffic goes through Cursor's own backend | Expected to be partial at best. See the docs |
 
@@ -255,13 +268,13 @@ Routing details and their limitations are in [docs/integrations.md](docs/integra
   gateway. An agent, plugin or tool that ignores the base-URL setting, or that
   makes its own network calls, bypasses EgressVeil.
 - Detection is heuristic. Encoded, split or novel secrets can get through,
-  and false positives happen. PII and internal hostnames are **not** detected
-  yet.
+  and false positives happen. PII detection covers common formats (mostly
+  international and US). It is not a complete data-loss-prevention system.
 - Images and PDFs cannot be inspected. Strict mode blocks them unless you
   set `gateway.allow_opaque_content: true`.
 - Model responses are not inspected.
-- The gateway connects directly to the upstream and does not use
-  `HTTPS_PROXY`.
+- By default the gateway connects directly to the upstream and ignores
+  `HTTPS_PROXY`. Set `gateway.upstream_proxy` to use a proxy.
 - EgressVeil does not perform TLS interception and does not install a root CA.
 - A local process running as your user can reconfigure or bypass EgressVeil.
   It does not defend against malware on your machine.
@@ -273,8 +286,8 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 | Phase | Focus |
 | --- | --- |
 | 0, done | Repository, packaging, CI, config schema, CLI, doctor, threat model |
-| **1, current** | Anthropic gateway for Claude Code: streaming proxy, secret and token detectors, policy, redaction, audit, `scan` |
-| 2 | OpenAI-compatible parser for Aider, PII and hostname detectors, agent launcher |
+| 1, done | Anthropic gateway for Claude Code: streaming proxy, secret and token detectors, policy, redaction, audit, `scan` |
+| **2, current** | OpenAI-compatible parser for Aider, PII and hostname detectors, `egressveil run`, doctor self-test, upstream proxy |
 | 3 | OpenClaw, experimental Cursor support, policy packs, response inspection |
 
 See [docs/roadmap.md](docs/roadmap.md).

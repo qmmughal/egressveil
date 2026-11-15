@@ -147,9 +147,9 @@ def test_merge_spans_overlap_keeps_best() -> None:
     assert merged[0][2].rule_id == "jwt"
 
 
-def test_build_detectors_only_implemented() -> None:
+def test_build_detectors_for_enabled_categories() -> None:
     cats = {d.category for d in build_detectors(["secrets", "tokens", "pii"])}
-    assert cats == {"secrets", "tokens"}
+    assert cats == {"secrets", "tokens", "pii"}
     assert build_detectors([]) == []
 
 

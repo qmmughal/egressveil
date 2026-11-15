@@ -4,10 +4,8 @@ A detector scans text and returns :class:`Finding` objects. A finding holds
 only offsets and metadata, never the matched text, so findings are always safe
 to log, print or put in an error message.
 
-Implemented categories: ``secrets`` and ``tokens``. The ``pii`` and
-``internal_hostnames`` categories are accepted by configuration but have no
-detector yet (planned for Phase 2); :data:`IMPLEMENTED_CATEGORIES` lists what
-actually runs.
+Categories: ``secrets`` and ``tokens`` (:mod:`.patterns`), ``pii``
+(:mod:`.pii`) and ``internal_hostnames`` (:mod:`.hostnames`).
 """
 
 from __future__ import annotations
@@ -30,7 +28,7 @@ __all__ = [
 DETECTOR_CATEGORIES: frozenset[str] = frozenset(
     {"secrets", "tokens", "pii", "internal_hostnames"},
 )
-IMPLEMENTED_CATEGORIES: frozenset[str] = frozenset({"secrets", "tokens"})
+IMPLEMENTED_CATEGORIES: frozenset[str] = DETECTOR_CATEGORIES
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,9 +71,17 @@ def merge_spans(findings: Iterable[Finding]) -> list[tuple[int, int, Finding]]:
     return merged
 
 
-def build_detectors(enabled: Iterable[str]) -> list[Detector]:
-    """Instantiate the implemented detectors for the enabled categories."""
+def build_detectors(
+    enabled: Iterable[str],
+    *,
+    internal_domains: Iterable[str] = (),
+    include_common_internal_suffixes: bool = True,
+    include_private_ips: bool = False,
+) -> list[Detector]:
+    """Instantiate the detectors for the enabled categories."""
+    from egressveil.detectors.hostnames import HostnameDetector
     from egressveil.detectors.patterns import SECRET_RULES, TOKEN_RULES, PatternDetector
+    from egressveil.detectors.pii import make_pii_detector
 
     wanted = set(enabled)
     detectors: list[Detector] = []
@@ -83,4 +89,14 @@ def build_detectors(enabled: Iterable[str]) -> list[Detector]:
         detectors.append(PatternDetector("secrets", SECRET_RULES))
     if "tokens" in wanted:
         detectors.append(PatternDetector("tokens", TOKEN_RULES))
+    if "pii" in wanted:
+        detectors.append(make_pii_detector())
+    if "internal_hostnames" in wanted:
+        detectors.append(
+            HostnameDetector(
+                internal_domains,
+                include_common_internal_suffixes=include_common_internal_suffixes,
+                include_private_ips=include_private_ips,
+            )
+        )
     return detectors

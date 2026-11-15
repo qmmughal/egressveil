@@ -33,19 +33,26 @@ whether it is **implemented** (as of Phase 1) or **planned**.
   verification.
 - **Implemented:** upstream redirects are **not followed**. They go back to
   the agent as they are.
-- **Implemented:** environment proxies (`HTTPS_PROXY`) are not used
-  (`trust_env=False`), so traffic can't be sent somewhere unexpected without
-  you noticing.
+- **Implemented:** environment proxies (`HTTPS_PROXY`) are **not** used by
+  default (`trust_env=False`), so traffic can't be sent somewhere unexpected
+  without you noticing. For corporate networks, set
+  `gateway.upstream_proxy: env` to honour `HTTPS_PROXY`/`NO_PROXY`, or give
+  an explicit `http(s)://host:port`. Proxy credentials in the config file
+  are rejected; put them in the environment and use `env`. TLS to the
+  provider is still verified end to end through the proxy's tunnel.
 
 ## 3. What is inspected
 
-- **Implemented:** the Anthropic parser walks **every string** in the JSON
-  body: system prompt, messages, tool definitions, `tool_use` inputs,
-  `tool_result` content, and fields it doesn't know about. A new API field
-  therefore can't carry text past the detectors. The only values it skips
-  are identifier-like control values (`model`, `type`, `role`, `id`,
-  `tool_use_id`, `media_type`) and provider-issued blobs (`signature`,
-  `redacted_thinking`).
+- **Implemented:** each provider adapter (Anthropic, and OpenAI-compatible
+  under `/openai`) walks **every string** in the JSON body: system prompts,
+  messages, tool definitions, tool calls and arguments, tool results, and
+  fields it doesn't know about. A new API field therefore can't carry text
+  past the detectors. The only values it skips are identifier-like control
+  values (`model`, `type`, `role`, `id`, ...) and provider-issued blobs
+  (Anthropic `signature` and `redacted_thinking`, OpenAI
+  `encrypted_content`).
+- **Implemented:** base64 `data:` URIs, inline audio and inline files are
+  treated as opaque, the same way as images (see section 6).
 - **Implemented:** the query string is scanned. Because a URL can't be
   rewritten safely, a finding there that would be redacted is blocked instead.
 - **Implemented:** JSON is decoded before scanning, so `\uXXXX` escapes
@@ -74,9 +81,24 @@ whether it is **implemented** (as of Phase 1) or **planned**.
     checks that a 1 MB input is scanned in well under the limit.
 - Detectors return `Finding(detector, rule_id, start, end, confidence)`. A
   finding holds **no matched text**.
-- **Planned (Phase 2):** `pii` and `internal_hostnames`. Configuration
-  accepts them today, but they have no effect. `serve`, `doctor` and
-  `config validate` all say so.
+- **Implemented:** `pii` (see `egressveil/detectors/pii.py`).
+  - Email addresses. Example, test and reserved domains, no-reply and `git@`
+    addresses, and file names such as `icon@2x.png` are ignored.
+  - International (`+`) and North-American phone numbers.
+  - US SSNs. Invalid number ranges are excluded.
+  - Payment cards. The number must pass the Luhn check and have a known
+    issuer prefix.
+  - IBANs. The number must pass the mod-97 check.
+- **Implemented:** `internal_hostnames` (see
+  `egressveil/detectors/hostnames.py`).
+  - Hosts under the configured `internal_domains`.
+  - Hosts under the conventional private suffixes `.internal`, `.corp`,
+    `.intranet`, `.lan` and `.home.arpa`. You can turn these off.
+    Well-known public development names such as `host.docker.internal` are
+    excluded.
+  - Optionally, RFC 1918 IPv4 addresses (`include_private_ips`).
+  - By default, both PII and hostnames are redacted rather than blocked, so
+    sessions keep working.
 
 ## 5. Policy actions
 
@@ -84,7 +106,7 @@ whether it is **implemented** (as of Phase 1) or **planned**.
 | --- | --- |
 | `ALLOW` | Forward unchanged, record nothing |
 | `REDACT` | Replace each span with `[EGRESSVEIL:<rule_id>:<8 hex>]`, then forward |
-| `BLOCK` | Send nothing upstream. Return HTTP 400 with an Anthropic-shaped `invalid_request_error` that names the rule IDs and JSON locations, never the values |
+| `BLOCK` | Send nothing upstream. Return HTTP 400 in the provider's own error format (Anthropic or OpenAI) that names the rule IDs and JSON locations, never the values |
 | `LOG_ONLY` | Forward unchanged and write an audit event |
 
 The most restrictive action wins (`BLOCK` > `REDACT` > `LOG_ONLY` >
@@ -92,9 +114,16 @@ The most restrictive action wins (`BLOCK` > `REDACT` > `LOG_ONLY` >
 secrets and tokens are blocked. Configuring `ALLOW` or `LOG_ONLY` for them
 produces a warning.
 
-**Signed content.** `thinking` blocks carry a provider signature, so
-modifying them would invalidate the request. A finding in one that would be
-redacted is blocked instead.
+**Signed content.** Anthropic `thinking` blocks carry a provider signature
+over their exact text. That proves the provider generated the text and the
+client didn't alter it, so re-sending it discloses nothing the provider
+doesn't already have. Modifying the block would invalidate the request, and
+blocking it would wedge the session on every later turn. Findings in signed
+content are therefore recorded as `LOG_ONLY` with `"signed": true`.
+
+Until v0.2.0 these findings were escalated to `BLOCK`. That changed when PII
+detection was added, because model reasoning often mentions email
+addresses.
 
 **Placeholders.** The 8-hex suffix is an HMAC-SHA256 of the value under the
 local key, so the same value always gets the same placeholder. That keeps the

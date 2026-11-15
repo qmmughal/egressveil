@@ -111,6 +111,8 @@ class GatewayConfig:
     max_request_body_bytes: int = 16 * MIB
     max_stream_buffer_bytes: int = 1 * MIB
     allow_opaque_content: bool = False
+    upstream_proxy: str = "none"
+    """``none``, ``env`` or an ``http(s)://host:port`` proxy URL (no credentials)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +151,8 @@ class DetectorConfig:
     name: str
     enabled: bool = True
     internal_domains: tuple[str, ...] = ()
+    include_common_internal_suffixes: bool = True
+    include_private_ips: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +200,7 @@ class EgressVeilConfig:
             ("gateway.max_request_body_bytes", str(g.max_request_body_bytes)),
             ("gateway.max_stream_buffer_bytes", str(g.max_stream_buffer_bytes)),
             ("gateway.allow_opaque_content", str(g.allow_opaque_content).lower()),
+            ("gateway.upstream_proxy", urlsplit(g.upstream_proxy).hostname or g.upstream_proxy),
         ]
         for name, p in sorted(self.providers.items()):
             state = "enabled" if p.enabled else "disabled"
@@ -345,12 +350,14 @@ _GATEWAY_KEYS = frozenset(
         "max_request_body_bytes",
         "max_stream_buffer_bytes",
         "allow_opaque_content",
+        "upstream_proxy",
     },
 )
 _PROVIDER_KEYS = frozenset({"enabled", "upstream_url", "allow_custom_upstream"})
 _POLICY_KEYS = frozenset({"default_action", "rules"})
 _RULE_KEYS = frozenset({"detector", "action"})
-_DETECTOR_KEYS = frozenset({"enabled", "internal_domains"})
+_HOSTNAME_ONLY_KEYS = frozenset({"include_common_internal_suffixes", "include_private_ips"})
+_DETECTOR_KEYS = frozenset({"enabled", "internal_domains"}) | _HOSTNAME_ONLY_KEYS
 _AUDIT_KEYS = frozenset({"enabled", "path", "include_raw_values"})
 _TELEMETRY_KEYS = frozenset({"enabled"})
 
@@ -407,7 +414,31 @@ def _parse_gateway(v: _Validator, raw: object) -> GatewayConfig:
             data, "max_stream_buffer_bytes", path, d.max_stream_buffer_bytes, 1 * KIB, 64 * MIB
         ),
         allow_opaque_content=allow_opaque,
+        upstream_proxy=_parse_upstream_proxy(v, data, path),
     )
+
+
+def _parse_upstream_proxy(v: _Validator, data: Mapping[str, Any], path: str) -> str:
+    """``none`` (direct), ``env`` (HTTPS_PROXY/NO_PROXY) or an http(s) proxy URL."""
+    value = v.string(data, "upstream_proxy", path, "none")
+    if value.lower() in {"none", "env"}:
+        return value.lower()
+    where = f"{path}.upstream_proxy"
+    parts = urlsplit(value)
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        v.error(where, "must be 'none', 'env' or an http(s):// proxy URL")
+        return "none"
+    if parts.username is not None or parts.password is not None:
+        v.error(
+            where,
+            "credentials must not be stored in the config file; use upstream_proxy: env and "
+            "set HTTPS_PROXY in the environment instead",
+        )
+        return "none"
+    if parts.path not in {"", "/"} or parts.query or parts.fragment:
+        v.error(where, "proxy URL must not contain a path, query or fragment")
+        return "none"
+    return value
 
 
 def _validate_upstream(v: _Validator, path: str, name: str, url: str, allow_custom: bool) -> None:
@@ -519,10 +550,17 @@ def _parse_detectors(v: _Validator, raw: object) -> dict[str, DetectorConfig]:
                         v.error(f"{path}.internal_domains[{i}]", "not a valid domain name")
                     else:
                         domains.append(dom.strip().lstrip(".").lower())
+        for key in _HOSTNAME_ONLY_KEYS:
+            if key in ddata and name != "internal_hostnames":
+                v.error(f"{path}.{key}", "only valid for detectors.internal_hostnames")
         detectors[name] = DetectorConfig(
             name=name,
             enabled=v.boolean(ddata, "enabled", path, True),
             internal_domains=tuple(domains),
+            include_common_internal_suffixes=v.boolean(
+                ddata, "include_common_internal_suffixes", path, True
+            ),
+            include_private_ips=v.boolean(ddata, "include_private_ips", path, False),
         )
     for name in ("secrets", "tokens"):
         if not detectors[name].enabled:
