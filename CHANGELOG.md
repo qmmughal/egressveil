@@ -6,6 +6,10 @@ intends to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- EgressVeil is now on PyPI: `pip install egressveil` (or `pipx install egressveil`).
+
 ## [0.2.0] - 2026-11-16
 
 First public release. EgressVeil is free and open source under the MIT

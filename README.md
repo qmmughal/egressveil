@@ -152,28 +152,29 @@ Each control, and whether it is implemented, is described in
 
 EgressVeil requires Python 3.11 to 3.14 and runs on Windows, macOS and Linux.
 
-The recommended way to install it is with [pipx](https://pipx.pypa.io/),
-which puts the CLI in its own isolated environment:
+EgressVeil is published on [PyPI](https://pypi.org/project/egressveil/). The
+recommended way to install it is with [pipx](https://pipx.pypa.io/), which
+puts the CLI in its own isolated environment:
 
 ```bash
-pipx install "git+https://github.com/qmmughal/egressveil.git@v0.2.0"
+pipx install egressveil
 ```
 
 Or with pip, into the virtual environment of your choice:
 
 ```bash
-pip install "egressveil @ https://github.com/qmmughal/egressveil/releases/download/v0.2.0/egressveil-0.2.0-py3-none-any.whl"
+pip install egressveil
 ```
 
-Every release file on the [Releases page](https://github.com/qmmughal/egressveil/releases)
-is built by GitHub Actions and has signed build provenance. You can verify a
-download with:
+Releases are built and published only by GitHub Actions, with no stored
+tokens. PyPI releases use [Trusted Publishing](https://docs.pypi.org/trusted-publishers/)
+and carry PyPI attestations. The files on the
+[Releases page](https://github.com/qmmughal/egressveil/releases) also have
+signed build provenance, which you can verify with:
 
 ```bash
 gh attestation verify egressveil-0.2.0-py3-none-any.whl --repo qmmughal/egressveil
 ```
-
-A PyPI package (`pip install egressveil`) is planned. See [docs/releasing.md](docs/releasing.md).
 
 To work on EgressVeil itself, install it from source:
 

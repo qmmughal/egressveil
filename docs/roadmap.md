@@ -55,8 +55,7 @@ Known gaps carried forward:
 - [ ] Shareable policy packs and per-project overrides
 - [ ] Optional response-side inspection
 - [x] Signed GitHub releases with build provenance (v0.2.0)
-- [ ] PyPI release via Trusted Publishing (workflow ready; needs the one-time
-      PyPI setup in docs/releasing.md)
+- [x] PyPI release via Trusted Publishing (`pip install egressveil`, v0.2.0)
 
 ## Non-goals
 
