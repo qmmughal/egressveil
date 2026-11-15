@@ -18,12 +18,12 @@ license keys or usage limits. It runs entirely on your machine, has no
 telemetry, and its only network connection is to the LLM provider you
 configure.
 
-> **Project status: pre-alpha.** EgressVeil runs as a local gateway for the
-> **Anthropic Messages API** (Claude Code, Aider) and **OpenAI-compatible
-> APIs** (Aider, OpenAI SDK-based agents). It detects **secrets, tokens,
-> personal data and internal hostnames** and blocks or redacts them according
-> to your policy. Detection is heuristic. Treat EgressVeil as one layer of
-> defense, not a guarantee.
+**Works with:** Claude Code · Aider · OpenAI SDK-based agents · OpenClaw (setup documented, not yet verified end to end).
+**Detects:** secrets, tokens, personal data and internal hostnames, and
+blocks or redacts them before the request leaves your machine. **Status:**
+beta, feature-complete and verified with Claude Code and Aider against the
+live APIs. See [Security limitations](#security-limitations) for what it
+does and doesn't cover.
 
 ---
 
@@ -203,7 +203,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
 
 ```console
 $ egressveil serve
-EgressVeil 0.4.0 gateway
+EgressVeil 0.5.0 gateway
   listening   http://127.0.0.1:8787
   anthropic   /        -> https://api.anthropic.com
   openai      /openai  -> https://api.openai.com
@@ -257,8 +257,8 @@ All options are documented in
 
 | Agent | Status | Routing mechanism | Coverage |
 | --- | --- | --- | --- |
-| **Claude Code** | **Available (pre-alpha)**, verified with Claude Code 2.1.325 | `egressveil run -- claude`, or `ANTHROPIC_BASE_URL=http://127.0.0.1:8787` | Anthropic Messages API calls only. Not tool, shell, web or MCP traffic |
-| **Aider** | **Available (pre-alpha)** | `egressveil run -- aider`, or `ANTHROPIC_BASE_URL` / `OPENAI_API_BASE=http://127.0.0.1:8787/openai/v1` | Anthropic and OpenAI-compatible API calls. Not git, `/web` or shell traffic |
+| **Claude Code** | **Available**, verified with Claude Code 2.1.325 | `egressveil run -- claude`, or `ANTHROPIC_BASE_URL=http://127.0.0.1:8787` | Anthropic Messages API calls only. Not tool, shell, web or MCP traffic |
+| **Aider** | **Available**, verified with Aider 0.86.2 | `egressveil run -- aider`, or `ANTHROPIC_BASE_URL` / `OPENAI_API_BASE=http://127.0.0.1:8787/openai/v1` | Anthropic and OpenAI-compatible API calls. Not git, `/web` or shell traffic |
 | **OpenClaw** | Available (configuration documented, not yet verified end to end) | `models.providers.<id>.baseUrl` in `~/.openclaw/openclaw.json`. Run `egressveil setup openclaw` | Model API calls through the configured providers |
 | **Cursor** | **Not supported** | None. Cursor sends model requests from its own servers, so a local gateway can't see them | None. Run `egressveil setup cursor` for the details |
 

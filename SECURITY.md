@@ -2,9 +2,14 @@
 
 ## Supported versions
 
-EgressVeil is pre-alpha. Only the latest commit on `main` gets security
-fixes. **The current release (Phase 0) does not intercept or protect any
-traffic.** See the README for what is implemented.
+| Version | Supported |
+| --- | --- |
+| 0.5.x (latest) | Yes |
+| < 0.5 | No. Please upgrade with `pipx upgrade egressveil` or `pip install -U egressveil` |
+
+Security fixes go into the latest release and `main`. The README's
+"Security limitations" section and [docs/threat-model.md](docs/threat-model.md)
+describe what EgressVeil does and doesn't protect.
 
 ## Reporting a vulnerability
 

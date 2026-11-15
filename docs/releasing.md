@@ -29,7 +29,9 @@ The workflow then:
    section as release notes,
 5. publishes to PyPI, but only if PyPI publishing is enabled (see below).
 
-Releases are marked as pre-releases while the project is pre-alpha.
+Each release is published as the latest GitHub release. Versions before
+1.0 may still change configuration or behavior between minor versions; the
+changelog calls out every such change.
 
 ## Verifying a download
 

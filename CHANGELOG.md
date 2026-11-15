@@ -6,6 +6,26 @@ intends to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-16
+
+EgressVeil moves from pre-alpha to **beta**. Every roadmap phase is
+complete, and the integrations are verified against the live APIs. There are
+no functional changes since 0.4.0.
+
+### Changed
+
+- The PyPI classifier is now `Development Status :: 4 - Beta`, and GitHub
+  releases are published as the latest release rather than as pre-releases.
+- The README status note now says what EgressVeil works with and detects,
+  and links to the security limitations.
+
+### Fixed
+
+- `SECURITY.md` still said the current release "does not intercept or
+  protect any traffic", which was true of 0.1 but not since 0.2. It now has a
+  supported-versions table.
+- `docs/integrations.md` still described Aider and OpenClaw as planned.
+
 ## [0.4.0] - 2026-11-16
 
 Phase 3: policies, response inspection, and more agents.
@@ -141,7 +161,8 @@ limitations.
 - CI: Ruff, strict mypy, and pytest on Python 3.11 and 3.12 across Linux,
   macOS and Windows; a build check; and pip-audit dependency auditing.
 
-[Unreleased]: https://github.com/qmmughal/egressveil/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/qmmughal/egressveil/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/qmmughal/egressveil/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/qmmughal/egressveil/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/qmmughal/egressveil/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/qmmughal/egressveil/releases/tag/v0.2.0

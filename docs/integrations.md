@@ -1,9 +1,10 @@
 # Integrations
 
-> **Status:** the Claude Code integration (the Anthropic Messages API) is
-> available as pre-alpha. Everything else on this page is planned. Agent
-> behavior changes between versions, so check it against each tool's current
-> documentation before relying on it.
+> **Status:** Claude Code and Aider are available and verified against the
+> live APIs. OpenClaw is available but its configuration is not yet verified
+> end to end. Cursor is not supported. Agent behavior changes between
+> versions, so check it against each tool's current documentation before
+> relying on it.
 
 ## Coverage model
 
@@ -19,7 +20,7 @@ For every agent, the following are **not covered**:
 - vendor telemetry, update checks and authentication flows,
 - any SDK or client that ignores the base-URL setting.
 
-## Claude Code (available, pre-alpha)
+## Claude Code (available)
 
 ```bash
 egressveil serve                                   # terminal 1
@@ -63,7 +64,7 @@ claude
   whether `claude` is on `PATH`, and whether `ANTHROPIC_BASE_URL` points at
   the gateway. It never prints the variable's value.
 
-## Aider (available, pre-alpha)
+## Aider (available)
 
 ```bash
 egressveil run -- aider --model anthropic/claude-sonnet-5-5
