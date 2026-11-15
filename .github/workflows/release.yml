@@ -61,6 +61,13 @@ jobs:
           /tmp/rel/bin/python -m pip install dist/*.whl
           /tmp/rel/bin/egressveil version | grep -q "${TAG#v}"
           /tmp/rel/bin/egressveil doctor
+      - name: Generate SBOM (CycloneDX) of the installed release
+        # Kept out of dist/ so PyPI only receives the sdist and wheel.
+        run: |
+          python -m pip install "cyclonedx-bom==8.0.1"
+          mkdir -p sbom
+          cyclonedx-py environment /tmp/rel/bin/python --of JSON             -o "sbom/egressveil-${TAG#v}.cdx.json"
+          test -s "sbom/egressveil-${TAG#v}.cdx.json"
       - name: Extract release notes from CHANGELOG.md
         run: |
           python - <<'EOF'
@@ -78,6 +85,7 @@ jobs:
           name: dist
           path: |
             dist/
+            sbom/
             dist-notes.md
           if-no-files-found: error
 
@@ -98,13 +106,15 @@ jobs:
       - name: Generate build provenance attestation
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/*
+          subject-path: |
+            dist/*
+            sbom/*
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG" dist/* \
+          gh release create "$TAG" dist/* sbom/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "EgressVeil $TAG" \
             --notes-file dist-notes.md \

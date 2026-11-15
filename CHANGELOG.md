@@ -6,6 +6,35 @@ intends to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-16
+
+Path to 1.0, step 3: hardening.
+
+### Security
+
+- The upstream URL is now built from exactly the path that was inspected.
+  Raw-socket tests found that an absolute-form request target
+  (`POST http://other.host/v1/messages`) was inspected as `/v1/messages` but
+  forwarded with a different path. The host never changed, but the
+  differential is gone now. Requests whose encoded path doesn't match the
+  inspected route, that contain encoded `/`, `.` or `\`, or whose final URL
+  would leave the configured origin are refused with the new audit reason
+  `ambiguous_path`.
+
+### Added
+
+- `egressveil service install|uninstall|status [--dry-run]`: run the gateway
+  in the background at login, per user and without admin rights (Windows
+  Task Scheduler, macOS launchd, Linux systemd `--user`). CI really installs
+  and uninstalls it on Windows and Linux runners.
+- `egressveil serve --log-file PATH`.
+- CodeQL (`security-extended`) and OpenSSF Scorecard workflows, plus a
+  CycloneDX SBOM attached to and attested with every release.
+- Raw-socket HTTP edge-case tests: CL+TE smuggling, conflicting
+  `Content-Length`, malformed chunked bodies, oversized headers, other
+  transfer encodings, HTTP/1.0 without `Host`, absolute-form targets, encoded
+  path tricks, pipelining, and short bodies.
+
 ## [0.7.0] - 2026-11-16
 
 Path to 1.0, step 2: measured quality.
@@ -214,7 +243,8 @@ limitations.
 - CI: Ruff, strict mypy, and pytest on Python 3.11 and 3.12 across Linux,
   macOS and Windows; a build check; and pip-audit dependency auditing.
 
-[Unreleased]: https://github.com/qmmughal/egressveil/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/qmmughal/egressveil/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/qmmughal/egressveil/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/qmmughal/egressveil/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/qmmughal/egressveil/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/qmmughal/egressveil/compare/v0.4.0...v0.5.0

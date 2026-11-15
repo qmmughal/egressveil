@@ -286,13 +286,64 @@ class _Gateway:
             )
 
         decision = "redact" if verdict.outcome is Outcome.REDACT else "forward"
-        raw_path = request.raw_path[len(adapter.mount) :] if adapter.mount else request.raw_path
-        if not raw_path.startswith("/"):
-            raw_path = "/" + raw_path
-        target = URL(str(self.upstreams[name]).rstrip("/") + raw_path, encoded=True)
+        target = self._upstream_target(request, adapter, upstream_path)
+        if target is None:
+            self._audit(
+                rid,
+                request,
+                name,
+                started,
+                outcome="block",
+                reason="ambiguous_path",
+                **audit_fields,
+            )
+            return self._reply_error(
+                adapter,
+                rid,
+                400,
+                "invalid_request_error",
+                "request path is ambiguous and was not forwarded",
+                "block",
+            )
         return await self._forward(
             request, adapter, rid, started, target, verdict.body, decision, audit_fields
         )
+
+    def _upstream_target(
+        self, request: web.Request, adapter: ProviderAdapter, inspected_path: str
+    ) -> URL | None:
+        """Build the upstream URL from exactly the path that was inspected.
+
+        Uses the normalised origin-form path (``rel_url``), never the raw
+        request target, so an absolute-form target such as
+        ``POST http://other.host/v1/messages`` can't change what is forwarded.
+        Returns ``None`` (refuse) if the encoded path doesn't decode to the
+        inspected path (e.g. ``%2F`` tricks) or the final URL would leave the
+        configured upstream origin.
+        """
+        base = self.upstreams[adapter.name]
+        rel = request.rel_url
+        raw_path = rel.raw_path
+        if adapter.mount:
+            if not raw_path.startswith(adapter.mount):
+                return None
+            raw_path = raw_path[len(adapter.mount) :] or "/"
+        if not raw_path.startswith("/") or URL.build(path=raw_path, encoded=True).path != (
+            inspected_path
+        ):
+            return None
+        # Encoded "/", "." and "\\" in API paths are never sent by real clients and
+        # could make the upstream route differently from what was inspected.
+        lowered = raw_path.lower()
+        if any(seq in lowered for seq in ("%2f", "%2e", "%5c")):
+            return None
+        text = str(base).rstrip("/") + raw_path
+        if rel.raw_query_string:
+            text += "?" + rel.raw_query_string
+        target = URL(text, encoded=True)
+        if (target.scheme, target.host, target.port) != (base.scheme, base.host, base.port):
+            return None
+        return target
 
     async def _forward(
         self,
@@ -313,6 +364,10 @@ class _Gateway:
             headers = [(k, v) for k, v in headers if k.lower() != "accept-encoding"]
             headers.append(("Accept-Encoding", "identity"))
         try:
+            # ``target`` keeps the configured upstream's scheme, host and port:
+            # _upstream_target() builds it from the inspected path only and
+            # refuses anything whose origin would differ (tests/test_http_edges.py).
+            # Forwarding the client's path is the purpose of a reverse proxy.
             upstream = await self.session.request(
                 request.method,
                 target,
