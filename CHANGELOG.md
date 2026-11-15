@@ -6,6 +6,41 @@ intends to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-16
+
+Path to 1.0, step 2: measured quality.
+
+### Security
+
+- Fuzzing found that text could be hidden from inspection inside
+  structures that only *looked like* provider blobs, for example an object
+  under `signature` or `encrypted_content`, extra fields in a
+  `redacted_thinking` block, or fields beside a base64 `data` string. Only
+  the blob *string* itself is now skipped; everything else is inspected.
+  Agents don't build such requests, but strict mode must fail closed against
+  crafted ones too.
+
+### Added
+
+- `scripts/benchmark.py` and `docs/benchmark.md`: 100% recall on 93
+  labelled cases across 27 rules, and 0 secret or token false positives in
+  29 MB of real code (the Python standard library plus popular packages).
+- `scripts/perf.py` and `docs/performance.md`: about 1 ms added at 1 KB, 8 ms
+  at 100 KB and 85 ms at 1 MB. Streaming runs at about 600 MB/s (14 MB/s
+  with response inspection), and memory stays flat.
+- CI quality gates: property-based fuzzing (Hypothesis), timing tests on
+  adversarial input for every rule, recall and false-positive checks, and a
+  24 MB soak test with a memory bound.
+
+### Changed
+
+- Detection is about **5x faster**: cheap substring pre-checks per rule,
+  regexes that start with a character class, and case-folded matching
+  instead of `IGNORECASE`.
+- `phone_international` no longer matches decimals (`+35236450.6`), and
+  `internal_hostnames` skips Python import paths (`from librt.internal
+  import ...`).
+
 ## [0.6.0] - 2026-11-16
 
 First step on the path to 1.0: frozen, documented and tested public
@@ -179,7 +214,8 @@ limitations.
 - CI: Ruff, strict mypy, and pytest on Python 3.11 and 3.12 across Linux,
   macOS and Windows; a build check; and pip-audit dependency auditing.
 
-[Unreleased]: https://github.com/qmmughal/egressveil/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/qmmughal/egressveil/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/qmmughal/egressveil/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/qmmughal/egressveil/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/qmmughal/egressveil/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/qmmughal/egressveil/compare/v0.3.0...v0.4.0

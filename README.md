@@ -132,7 +132,8 @@ or adjust the EgressVeil policy. (request ev_3c1f0a9e2b7d4c11)
 See [docs/policies.md](docs/policies.md) for packs, allowlists, `extends`
 and response inspection. Reference docs:
 [configuration](docs/configuration.md) · [CLI](docs/cli.md) ·
-[audit log format](docs/audit-log.md) · [versioning policy](docs/versioning.md). Future ideas are in [docs/roadmap.md](docs/roadmap.md).
+[audit log format](docs/audit-log.md) · [versioning policy](docs/versioning.md) ·
+[detection benchmark](docs/benchmark.md) · [performance](docs/performance.md). Future ideas are in [docs/roadmap.md](docs/roadmap.md).
 
 ## Security architecture
 
@@ -205,7 +206,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
 
 ```console
 $ egressveil serve
-EgressVeil 0.6.0 gateway
+EgressVeil 0.7.0 gateway
   listening   http://127.0.0.1:8787
   anthropic   /        -> https://api.anthropic.com
   openai      /openai  -> https://api.openai.com
@@ -272,7 +273,10 @@ Routing details and their limitations are in [docs/integrations.md](docs/integra
   gateway. An agent, plugin or tool that ignores the base-URL setting, or that
   makes its own network calls, bypasses EgressVeil.
 - Detection is heuristic. Encoded, split or novel secrets can get through,
-  and false positives happen. PII detection covers common formats (mostly
+  and false positives happen. Measured on real code: 0 secret or token false
+  positives in 29 MB, and 100% recall on a labelled corpus
+  ([benchmark](docs/benchmark.md)). Each request typically adds a few to tens
+  of milliseconds ([performance](docs/performance.md)). PII detection covers common formats (mostly
   international and US). It is not a complete data-loss-prevention system.
 - Images and PDFs cannot be inspected. Strict mode blocks them unless you
   set `gateway.allow_opaque_content: true`.

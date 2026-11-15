@@ -17,11 +17,15 @@ from egressveil.providers.base import ProviderAdapter, WalkProfile
 __all__ = ["ADAPTER"]
 
 
-def _audio_or_file(key: str, value: Any) -> str | None:
-    if key == "input_audio" and isinstance(value, dict):
-        fmt = value.get("format")
-        return f"audio/{fmt}" if isinstance(fmt, str) else "audio"
-    if key == "file_data" and isinstance(value, str):
+_AUDIO_FORMATS = frozenset({"wav", "mp3", "flac", "opus", "pcm16", "aac", "m4a", "ogg"})
+
+
+def _audio_or_file(key: str, value: str, parent: dict[str, Any]) -> str | None:
+    """Inline audio (``input_audio.data``) and inline files (``file_data``)."""
+    fmt = parent.get("format")
+    if key == "data" and isinstance(fmt, str) and fmt in _AUDIO_FORMATS:
+        return f"audio/{fmt}"
+    if key == "file_data":
         return "file"
     return None
 

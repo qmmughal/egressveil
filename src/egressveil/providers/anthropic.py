@@ -9,9 +9,10 @@ from egressveil.providers.base import ProviderAdapter, WalkProfile
 __all__ = ["ADAPTER"]
 
 
-def _base64_source(key: str, value: Any) -> str | None:
-    if key == "source" and isinstance(value, dict) and value.get("type") == "base64":
-        kind = value.get("media_type")
+def _base64_source(key: str, value: str, parent: dict[str, Any]) -> str | None:
+    """The ``data`` string of a ``{"type": "base64", ...}`` image/document source."""
+    if key == "data" and parent.get("type") == "base64":
+        kind = parent.get("media_type")
         return kind if isinstance(kind, str) else "binary"
     return None
 

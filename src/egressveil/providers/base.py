@@ -73,8 +73,11 @@ class OpaqueItem:
     kind: str
 
 
-OpaqueRule = Callable[[str, Any], "str | None"]
-"""``(key, value) -> kind`` when the value is binary content that cannot be inspected."""
+OpaqueRule = Callable[[str, str, dict[str, Any]], "str | None"]
+"""``(key, string value, parent object) -> kind`` when the string is binary content.
+
+Rules only ever classify a *string*: objects and lists are always walked, so no
+text can hide inside a structure that merely looks like a blob."""
 
 
 def data_uri_kind(value: str) -> str | None:
@@ -92,9 +95,11 @@ class WalkProfile:
     skip_keys: frozenset[str] = frozenset()
     """String values under these keys are identifiers, not content (``model``, ``role``...)."""
     skip_value_keys: frozenset[str] = frozenset()
-    """Values under these keys are provider-issued blobs (signatures, encrypted reasoning)."""
+    """*String* values under these keys are provider-issued blobs (signatures, encrypted
+    reasoning). Non-string values under the same keys are still inspected."""
     skip_block_types: frozenset[str] = frozenset()
-    """Objects with this ``type`` are provider-encrypted and skipped entirely."""
+    """In objects with this ``type``, the encrypted ``data`` string is skipped; every
+    other field is still inspected."""
     signed_block_types: frozenset[str] = frozenset()
     """Objects with this ``type`` carry a provider signature and cannot be modified."""
     opaque_rules: tuple[OpaqueRule, ...] = ()
@@ -193,22 +198,24 @@ def walk_body(
             raise UninspectableError("nesting_too_deep", "JSON body is nested too deeply")
         if isinstance(node, dict):
             block_type = node.get("type")
-            if isinstance(block_type, str) and block_type in profile.skip_block_types:
-                continue
+            encrypted_block = isinstance(block_type, str) and block_type in profile.skip_block_types
             child_signed = signed or (
                 isinstance(block_type, str) and block_type in profile.signed_block_types
             )
             for key, value in node.items():
                 child_loc = _child(location, key)
-                if key in profile.skip_value_keys:
-                    continue
-                if key in profile.skip_keys and isinstance(value, str):
-                    continue
-                kind = next((k for rule in profile.opaque_rules if (k := rule(key, value))), None)
-                if kind is not None:
-                    opaque.append(OpaqueItem(child_loc, kind))
-                    continue
                 if isinstance(value, str):
+                    if key in profile.skip_value_keys or key in profile.skip_keys:
+                        continue
+                    if encrypted_block and key == "data":
+                        continue
+                    kind = next(
+                        (k for rule in profile.opaque_rules if (k := rule(key, value, node))),
+                        None,
+                    )
+                    if kind is not None:
+                        opaque.append(OpaqueItem(child_loc, kind))
+                        continue
                     visit_string(node, key, value, child_loc, child_signed)
                 elif isinstance(value, dict | list):
                     stack.append((value, child_loc, depth + 1, child_signed))

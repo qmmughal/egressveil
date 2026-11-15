@@ -89,14 +89,17 @@ assumed.
       undocumented
 - [x] Versioning and deprecation policy (`docs/versioning.md`)
 
-### 0.7: Measured quality
+### 0.7: Measured quality (done)
 
-- [ ] A detection benchmark: recall on a labelled positive corpus and
-      false-positive rate on real-world code, with the numbers published
-- [ ] Property-based fuzzing of the request parser and the inspector
-- [ ] Regex timing tests on adversarial input for every rule
-- [ ] Performance and soak numbers: latency overhead and memory during long
-      streams
+- [x] A detection benchmark (`docs/benchmark.md`): 100% recall on 93
+      labelled cases, and 0 secret or token false positives in 29 MB of real
+      code. CI enforces both
+- [x] Property-based fuzzing (Hypothesis) of the parser, inspector and
+      response scanner. It found and fixed a way to hide text inside
+      blob-like fields
+- [x] Regex timing tests on adversarial input for every rule
+- [x] Performance and soak numbers (`docs/performance.md`), plus a soak test
+      in CI. Scanning got about 5x faster
 
 ### 0.8: Hardening
 

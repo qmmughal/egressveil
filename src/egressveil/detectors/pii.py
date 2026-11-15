@@ -89,7 +89,9 @@ def iban_valid(value: str) -> bool:
 
 
 def _phone_ok(value: str) -> bool:
-    return 8 <= len(_digits(value)) <= 15
+    # Real numbers end in a group of at least two digits; "+35236450.6" is a decimal.
+    last_group = re.split(r"[ .\-()]+", value.strip(" .-()"))[-1]
+    return 8 <= len(_digits(value)) <= 15 and len(last_group) >= 2
 
 
 def _ssn_ok(value: str) -> bool:
@@ -101,33 +103,40 @@ PII_RULES: tuple[PatternRule, ...] = (
     PatternRule(
         "email",
         re.compile(
-            r"(?<![A-Za-z0-9._%+\-])[A-Za-z0-9._%+\-]{1,64}@"
+            r"[A-Za-z0-9._%+\-](?<![A-Za-z0-9._%+\-][A-Za-z0-9._%+\-])[A-Za-z0-9._%+\-]{0,63}@"
             r"(?:[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?\.){1,8}[A-Za-z]{2,24}"
             r"(?![A-Za-z0-9\-])"
         ),
         confidence=0.9,
         validator=_email_ok,
+        requires=("@",),
     ),
     PatternRule(
         "phone_international",
-        re.compile(r"(?<![\w+])\+[1-9]\d{0,2}(?:[ .\-]?\(?\d{1,4}\)?){1,5}(?![\d])"),
+        # Not followed by a decimal part: Decimal('+35236450.6') is a number.
+        re.compile(r"\+(?<![\w+]\+)[1-9]\d{0,2}(?:[ .\-]?\(?\d{1,4}\)?){1,5}(?!\.?\d)"),
         confidence=0.7,
         validator=_phone_ok,
+        requires=("+",),
     ),
     PatternRule(
         "phone_nanp",
-        re.compile(r"(?<![\w(])\(?[2-9]\d{2}\)?[ .\-][2-9]\d{2}[ .\-]\d{4}(?![\d])"),
+        re.compile(
+            r"(?:\((?<![\w(]\()[2-9]\d{2}\)|[2-9](?<![\w(][2-9])\d{2}\)?)"
+            r"[ .\-][2-9]\d{2}[ .\-]\d{4}(?!\d)"
+        ),
         confidence=0.6,
     ),
     PatternRule(
         "us_ssn",
-        re.compile(r"(?<![\d\-])\d{3}-\d{2}-\d{4}(?![\d\-])"),
+        re.compile(r"\d(?<![\d\-]\d)\d{2}-\d{2}-\d{4}(?![\d\-])"),
         confidence=0.75,
         validator=_ssn_ok,
+        requires=("-",),
     ),
     PatternRule(
         "payment_card",
-        re.compile(r"(?<![\d\-])\d(?:[ \-]?\d){12,18}(?![\d\-])"),
+        re.compile(r"\d(?<![\d\-]\d)(?:[ \-]?\d){12,18}(?![\d\-])"),
         confidence=0.85,
         validator=_card_ok,
     ),

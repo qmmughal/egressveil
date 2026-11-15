@@ -17,7 +17,7 @@ import math
 import re
 from collections import Counter
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from egressveil.detectors import Finding
 
@@ -105,6 +105,23 @@ class PatternRule:
     """Capture group that holds the sensitive span (0 = whole match)."""
     confidence: float = 0.9
     validator: Callable[[str], bool] | None = None
+    requires: tuple[str, ...] = ()
+    """Fast prefilter: the rule only runs if one of these substrings occurs."""
+    requires_ci: bool = False
+    """Match ``requires`` case-insensitively (they must be given in lower case)."""
+
+    lower_pattern: re.Pattern[str] | None = None
+    """Case-sensitive twin of an IGNORECASE ``pattern``, run on lower-cased text.
+
+    Python's regex engine skips ahead much faster without IGNORECASE. Used
+    only when lower-casing kept every character position (``len`` unchanged).
+    """
+
+    def may_match(self, text: str, lower: str) -> bool:
+        if not self.requires:
+            return True
+        haystack = lower if self.requires_ci else text
+        return any(r in haystack for r in self.requires)
 
 
 def _rule(
@@ -234,8 +251,17 @@ class PatternDetector:
 
     def scan(self, text: str) -> list[Finding]:
         findings: list[Finding] = []
+        needs_lower = any(r.requires_ci or r.lower_pattern for r in self._rules)
+        lower = text.lower() if needs_lower else text
+        aligned = len(lower) == len(text)
         for rule in self._rules:
-            for match in rule.pattern.finditer(text):
+            if not rule.may_match(text, lower):
+                continue
+            if rule.lower_pattern is not None and aligned:
+                matches = rule.lower_pattern.finditer(lower)
+            else:
+                matches = rule.pattern.finditer(text)
+            for match in matches:
                 start, end = match.span(rule.group)
                 if start < 0 or start == end:
                     continue
@@ -243,3 +269,47 @@ class PatternDetector:
                     continue
                 findings.append(Finding(self._category, rule.rule_id, start, end, rule.confidence))
         return findings
+
+
+# Substrings every match must contain. Checked with ``in`` (fast C code) before
+# running the regex, so rules for vendors absent from a text cost almost nothing.
+_REQUIRES: dict[str, tuple[tuple[str, ...], bool]] = {
+    "anthropic_api_key": (("sk-ant-",), False),
+    "openai_api_key": (("sk-",), False),
+    "aws_access_key_id": (("AKIA", "ASIA", "ABIA", "ACCA"), False),
+    "aws_secret_access_key": (("secret",), True),
+    "github_token": (("ghp_", "gho_", "ghu_", "ghs_", "ghr_"), False),
+    "github_fine_grained_pat": (("github_pat_",), False),
+    "gitlab_token": (("glpat-",), False),
+    "slack_token": (("xox",), False),
+    "slack_webhook": (("hooks.slack.com",), False),
+    "stripe_secret_key": (("_live_", "_test_"), False),
+    "google_api_key": (("AIza",), False),
+    "npm_token": (("npm_",), False),
+    "huggingface_token": (("hf_",), False),
+    "private_key": (("PRIVATE KEY",), False),
+    "url_credentials": (("://",), False),
+    "generic_secret_assignment": (("key", "secret", "token", "passw", "pwd"), True),
+    "env_file_assignment": (("KEY", "SECRET", "TOKEN", "PASSW", "CREDENTIAL"), False),
+    "jwt": (("eyJ",), False),
+    "bearer_token": (("bearer",), True),
+    "basic_auth_header": (("basic",), True),
+}
+
+
+def _with_requirements(rules: tuple[PatternRule, ...]) -> tuple[PatternRule, ...]:
+    out = []
+    for rule in rules:
+        req = _REQUIRES.get(rule.rule_id)
+        if req:
+            rule = replace(rule, requires=req[0], requires_ci=req[1])
+        if rule.pattern.flags & re.IGNORECASE:
+            rule = replace(
+                rule, lower_pattern=re.compile(rule.pattern.pattern, rule.pattern.flags & ~re.I)
+            )
+        out.append(rule)
+    return tuple(out)
+
+
+SECRET_RULES = _with_requirements(SECRET_RULES)
+TOKEN_RULES = _with_requirements(TOKEN_RULES)
